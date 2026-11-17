@@ -33,3 +33,6 @@ First public release in preparation.
   reports and tables of every run.
 - Stated capacity measured: 5 000 devices with 3 200 sessions at once on
   2 dedicated vCPU (conditions in `docs/architecture.md`).
+- Documentation: conceptual design (`docs/concept.md`) and the C4 model in
+  draw.io (`docs/architecture/c4-model.drawio`: context, containers, engine
+  components, deployment).

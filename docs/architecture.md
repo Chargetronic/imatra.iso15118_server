@@ -2,7 +2,10 @@
 
 This document describes one **deployment** of the server: what it is made
 of, how a charging session flows through it, what it relies on, and where its
-limits are. Decisions behind it are recorded in [adr/](adr/).
+limits are. Decisions behind it are recorded in [adr/](adr/). Purpose,
+principles and boundaries: [concept.md](concept.md); C4 diagrams (context,
+containers, engine components, deployment):
+[architecture/c4-model.drawio](architecture/c4-model.drawio).
 
 ## Context
 
@@ -31,7 +34,7 @@ limits are. Decisions behind it are recorded in [adr/](adr/).
 
 | Component | Role | State |
 |---|---|---|
-| Mosquitto (MQTT 5) | device connections; admission by client certificate (CN = device id); ACL: a device sees only `dev/<id>/#`, the layer only `registry/#` | retained messages, persistent sessions |
+| Mosquitto (MQTT 3.1.1; MQTT 5 clients accepted) | device connections; admission by client certificate (CN = device id); ACL: a device sees only `dev/<id>/#`, the layer only `registry/#` | retained messages, persistent sessions |
 | engine (Go, N instances) | ISO 15118-2 AC (EIM), DIN 70121 SoC read-out, IEC 61851-1 PWM; cache pairs; command confirmation; activation executor; registry intake (leader) | none of its own: everything in Valkey |
 | Valkey | working state: digital sessions, station settings and the limit in force, plug-in records, the activation pool, the event stream | AOF every second, `noeviction` |
 | relay (Go) | event stream (Valkey) → `domain_events` (Postgres), at least once, deduplicated by event id | cursor in Postgres |
@@ -41,7 +44,7 @@ limits are. Decisions behind it are recorded in [adr/](adr/).
 | gateway (Caddy) | TLS for `/v1` and `/health`, rate limit per operator key | its certificates |
 | pki-init | the deployment's CA and broker certificate, or import of the files from the service layer | `pki` volume |
 
-Engines share the device topics through MQTT 5 shared subscriptions; any
+Engines share the device topics through shared subscriptions (`$share/engine/…`, which Mosquitto supports for MQTT 3.1.1 clients); any
 instance can serve any message of any device. Order of one device's messages
 and the time of events are handled as in [ADR-001](adr/adr-001-device-message-order.md)
 and [ADR-003](adr/adr-003-server-time.md): event time is the server's, the

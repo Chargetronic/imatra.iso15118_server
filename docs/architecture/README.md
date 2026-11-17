@@ -13,6 +13,11 @@ same pull request.
 | Device ↔ service layer (certificate, TLS signature) | [dataflow-service.md](dataflow-service.md) §1–2 | [`spec/asyncapi-layer.yaml`](../../spec/asyncapi-layer.yaml) (AsyncAPI 3.0) |
 | Operator systems → deployment | [dataflow-internal.md](dataflow-internal.md) §3–5 | [`spec/openapi-operator.json`](../../spec/openapi-operator.json) (OpenAPI 3.1, exported by `scripts/export-openapi.py`) |
 
+C4 model — system context, containers, engine components (two views) and
+deployment on one host — in one draw.io file with a page per view:
+[c4-model.drawio](c4-model.drawio) (open in draw.io / diagrams.net or the
+draw.io editor extension). Purpose and principles: [concept.md](../concept.md).
+
 Decisions: [`docs/adr/`](../adr/). Reading the contracts as HTML:
 `npx @asyncapi/cli start studio spec/asyncapi-device.yaml`,
 `npx @redocly/cli preview-docs spec/openapi-operator.json`.
