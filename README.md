@@ -61,7 +61,9 @@ protocol is in `engine/internal/tunnel`.
 |---|---|
 | Install, run, update, back up, move | [docs/deployment.md](docs/deployment.md) |
 | The operator's responsibilities | [docs/operator.md](docs/operator.md) |
+| Purpose, design principles, boundaries | [docs/concept.md](docs/concept.md) |
 | Architecture, limits, assumptions | [docs/architecture.md](docs/architecture.md) |
+| C4 diagrams (draw.io) and data flows | [docs/architecture/](docs/architecture/README.md) |
 | Architecture decisions | [docs/adr/](docs/adr/) |
 | Device registry and change of operator | [docs/registry.md](docs/registry.md) |
 | Business rules of devices | [docs/rules.md](docs/rules.md) |
@@ -120,7 +122,7 @@ pki/        the deployment's CA or the files from the service layer (pki-init.sh
 gateway/    Caddy: /v1 and /health
 scripts/    move a deployment to another host (export.sh, import.sh); repository checks
 adapters/   how to connect a deployment to the outside (separate processes on the published interfaces)
-docs/       architecture, decisions (adr/), data-flow diagrams (architecture/), metrics,
+docs/       concept, architecture, decisions (adr/), C4 and data-flow diagrams (architecture/), metrics,
             device registry, business rules, security review
 spec/       machine-readable contracts: device protocol and registry (AsyncAPI 3.0),
             operator API (OpenAPI)

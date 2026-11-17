@@ -5,8 +5,9 @@ Context: stateless engines with the working state in Valkey; architecture review
 
 ## Context
 
-Engines are stateless and share the device topics through MQTT 5 shared
-subscriptions (`$share/engine/...`). Mosquitto hands each message to any
+Engines are stateless and share the device topics through shared
+subscriptions (`$share/engine/...`; the engines are MQTT 3.1.1 clients, which
+Mosquitto serves with shared subscriptions too). Mosquitto hands each message to any
 member of the group, with no affinity to the device. Within one instance the
 device dispatcher keeps a device's messages in order; across instances it does
 not. So `cp`, `status`, `telemetry` and `v2g/up` of one device can be handled
