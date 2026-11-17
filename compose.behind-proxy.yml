@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+# Behind a reverse proxy of your own that terminates TLS (a host-wide Caddy,
+# nginx, a load balancer): the gateway speaks plain HTTP on 127.0.0.1:PUBLIC_PORT
+# and does not get a certificate. Default (without this file): the gateway
+# terminates TLS itself for SITE_ADDRESS on 80/443.
+#
+#   docker compose -f docker-compose.yml -f compose.behind-proxy.yml up -d --build
+services:
+  gateway:
+    ports: !override
+      - "127.0.0.1:${PUBLIC_PORT:-8101}:8080"
+    environment:
+      SITE_ADDRESS: ":8080"
+      # the operator's proxy reaches the gateway from the host (a private
+      # address of the compose network): trust its X-Forwarded-For for the
+      # rate limits per client address
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-private_ranges}"

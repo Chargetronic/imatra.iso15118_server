@@ -1,0 +1,20 @@
+name: Feature request
+description: A new capability or a change of behaviour.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and why it is hard today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposal
+      description: Which interface it touches (device protocol, registry or rules, /v1, events, settings, metrics); a change to a contract needs agreement here first.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

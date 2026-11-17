@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+# Tests of the deployment: Go (engine, relay, projector, fleetgen) against a Valkey
+# service container, the API's Python, the container images (built, not pushed),
+# a secret scan. No secrets used, nothing published.
+name: CI
+on:
+  push:
+    branches: [main]  # branches are checked by their pull request (saves CI minutes)
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  names:
+    # functional names only in the code and the contracts (scripts/check-names.sh)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/check-names.sh
+  headers:
+    # the SPDX licence header in every source and configuration file
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/check-headers.sh
+  dco:
+    # Developer Certificate of Origin: every commit of a pull request is signed off
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Signed-off-by in every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bad=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            author=$(git log -1 --format='%an <%ae>' "$c")
+            if ! git log -1 --format=%B "$c" | grep -qF "Signed-off-by: $author"; then
+              echo "::error::$(git log -1 --format='%h %s' "$c"): no 'Signed-off-by: $author' (git commit -s)"
+              bad=1
+            fi
+          done
+          exit $bad
+  go:
+    runs-on: ubuntu-24.04
+    services:
+      valkey:
+        image: valkey/valkey:8
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      LIBCBV2G_TAG: v0.3.2
+      VALKEY_TEST_ADDR: 127.0.0.1:6379
+      PG_TEST_DSN: host=127.0.0.1 port=5432 user=postgres password=test sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          cache: false
+      - uses: actions/cache@v6
+        id: cbv2g
+        with:
+          path: /opt/cbv2g
+          key: libcbv2g-${{ env.LIBCBV2G_TAG }}-ubuntu-24.04
+      - name: libcbv2g (as in engine/Dockerfile)
+        if: steps.cbv2g.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+          git clone --depth 1 --branch "$LIBCBV2G_TAG" https://github.com/EVerest/libcbv2g.git /tmp/libcbv2g
+          cmake -S /tmp/libcbv2g -B /tmp/libcbv2g/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=/opt/cbv2g
+          cmake --build /tmp/libcbv2g/build
+          sudo cmake --install /tmp/libcbv2g/build
+      - name: go vet, go test
+        working-directory: engine
+        env:
+          CGO_ENABLED: '1'
+          CGO_CFLAGS: -I/opt/cbv2g/include
+          CGO_LDFLAGS: -L/opt/cbv2g/lib
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test -count=1 -v ./... 2>&1 | tee test.log
+          # the Valkey and Postgres tests must have run, not been skipped
+          if grep -q -- '--- SKIP' test.log; then grep -- '--- SKIP' test.log; exit 1; fi
+  api:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r api/requirements.txt
+      - run: python -m compileall -q api/app && python -c "import json; json.load(open('api/schemas/events.v1.json'))"
+      # the published operator contract matches the code (scripts/export-openapi.py)
+      - run: python scripts/export-openapi.py --check
+  contracts:
+    # the machine-readable contracts in spec/ are valid
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npx --yes @asyncapi/cli@6 validate spec/asyncapi-device.yaml
+      - run: npx --yes @asyncapi/cli@6 validate spec/asyncapi-registry.yaml
+      - run: npx --yes @asyncapi/cli@6 validate spec/asyncapi-layer.yaml
+      - run: npx --yes @redocly/cli@2 lint spec/openapi-operator.json
+  images:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: build every image of docker-compose.yml
+        run: |
+          cp .env.example .env
+          docker compose build
+          # the gateway's configuration, with its modules (rate limit)
+          docker compose run --rm --no-deps --entrypoint caddy gateway validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: gitleaks (whole history)
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 git /repo --redact -v

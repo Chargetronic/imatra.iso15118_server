@@ -1,0 +1,12 @@
+Imatra — ISO 15118 cloud server for one deployment
+Copyright Contributors to the Imatra project.
+Initial contribution copyright 2026 Salute Solutions Oy (Chargetronic).
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Contributors and their sign-offs: the commit history (Developer Certificate of
+Origin, CONTRIBUTING.md).
+
+This product includes libcbv2g (EVerest project, LF Energy), licensed under
+the Apache License, Version 2.0.
+
+Third-party components and their licences: THIRD_PARTY.md.

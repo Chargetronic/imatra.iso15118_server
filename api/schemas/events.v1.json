@@ -1,0 +1,919 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://github.com/chargetronic/imatra.iso15118_server/schemas/events.v1.json",
+ "title": "Cloud ISO 15118 server: operator event feed, schema_ver 1",
+ "description": "GET /v1/events. Order within a device by dseq (ADR-001), the feed cursor is seq. Unknown types and fields are to be ignored (additions keep schema_ver; incompatible changes bump it). activation.* come from the activation executor; they have no device_id.",
+ "type": "object",
+ "required": [
+  "seq",
+  "id",
+  "type",
+  "schema_ver",
+  "time",
+  "data"
+ ],
+ "properties": {
+  "seq": {
+   "type": "integer",
+   "description": "feed cursor"
+  },
+  "id": {
+   "type": "string",
+   "description": "unique event id (stream entry id or uuid)"
+  },
+  "type": {
+   "enum": [
+    "activation.ended",
+    "activation.stage.delivered",
+    "activation.stage.started",
+    "charging.started",
+    "charging.stopped",
+    "cp.changed",
+    "device.offline",
+    "device.online",
+    "ev.parameters",
+    "limit.applied",
+    "limit.changed",
+    "power.changed",
+    "session.ended",
+    "session.started",
+    "system.events_gap",
+    "v2g.ended",
+    "v2g.started",
+    "device.bound",
+    "device.unbound",
+    "device.revoked",
+    "system.registry_mismatch",
+    "device.supply_window"
+   ]
+  },
+  "schema_ver": {
+   "const": 1
+  },
+  "device_id": {
+   "type": [
+    "string",
+    "null"
+   ]
+  },
+  "session_id": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "digital (V2G) session; null for device and plug-in events"
+  },
+  "dseq": {
+   "type": [
+    "integer",
+    "null"
+   ],
+   "description": "per-device order"
+  },
+  "time": {
+   "type": "string",
+   "format": "date-time",
+   "description": "server time: when the message that gave the event reached the server (ADR-003); never the device's clock"
+  },
+  "recorded_at": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "data": {
+   "type": "object",
+   "description": "type-specific; events of a plug-in from a device 0.3.2+ carry \"plug\" (plug-in id \"<boot>-<n>\", ADR-003)"
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "device.online"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "fw": {
+        "type": "string"
+       },
+       "link": {
+        "type": "string"
+       },
+       "transport": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "device.offline"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "reason": {
+        "type": "string",
+        "enum": [
+         "blocked"
+        ],
+        "description": "set when the operator blocked the device (PUT /v1/devices/{id}/block); absent for a lost connection"
+       }
+      },
+      "required": [],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "cp.changed"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "ev": {
+        "type": "string",
+        "enum": [
+         "A",
+         "B",
+         "C",
+         "D",
+         "E",
+         "F"
+        ]
+       },
+       "mode": {
+        "type": "string"
+       },
+       "out": {
+        "type": "string"
+       },
+       "duty": {
+        "type": "number"
+       },
+       "limit_a": {
+        "type": "number"
+       },
+       "station": {
+        "type": "object"
+       }
+      },
+      "required": [
+       "ev"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "session.started"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "cp": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "session.ended"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "reason": {
+        "type": "string"
+       },
+       "energy_wh": {
+        "type": "number"
+       },
+       "duration_s": {
+        "type": "integer"
+       },
+       "energy_quality": {
+        "enum": [
+         "measured",
+         "estimated"
+        ]
+       },
+       "plugged_ms": {
+        "type": "integer",
+        "description": "duration of the plug-in by the device's own count (ADR-003)"
+       }
+      },
+      "required": [
+       "reason"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "v2g.started"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "protocol": {
+        "enum": [
+         "iso15118-2",
+         "din70121"
+        ]
+       },
+       "evcc_id": {
+        "type": "string"
+       },
+       "purpose": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "protocol"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "v2g.ended"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "reason": {
+        "type": "string"
+       },
+       "failed": {
+        "type": "boolean"
+       },
+       "request": {
+        "type": "string"
+       },
+       "energy_wh": {
+        "type": "number",
+        "description": "energy of the digital session from the device counter, when known (10.11.2026)"
+       }
+      },
+      "required": [
+       "reason"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "ev.parameters"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "source": {
+        "type": "string"
+       },
+       "e_amount_wh": {
+        "type": "number"
+       },
+       "departure_time_s": {
+        "type": "integer"
+       },
+       "ev_max_current_a": {
+        "type": "number"
+       },
+       "ev_min_current_a": {
+        "type": "number"
+       },
+       "ev_max_voltage_v": {
+        "type": "number"
+       },
+       "ev_max_power_w": {
+        "type": "number"
+       },
+       "ev_energy_request_wh": {
+        "type": "number"
+       },
+       "ev_energy_capacity_wh": {
+        "type": "number"
+       },
+       "soc": {
+        "type": "integer"
+       },
+       "energy_transfer_mode": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "source"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "charging.started"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "charging.stopped"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "limit.changed"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "limit_a": {
+        "type": "number"
+       },
+       "source": {
+        "type": "string"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "command_id": {
+        "type": "integer"
+       },
+       "requested_a": {
+        "type": "number"
+       },
+       "until": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "activation_id": {
+        "type": "string"
+       },
+       "stage": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "limit_a",
+       "source"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "power.changed"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "power_w": {
+        "type": "number"
+       },
+       "quality": {
+        "enum": [
+         "measured",
+         "estimated"
+        ]
+       }
+      },
+      "required": [
+       "power_w",
+       "quality"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "activation.stage.started"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "activation_id": {
+        "type": "string"
+       },
+       "stage": {
+        "type": "integer"
+       },
+       "devices": {
+        "type": "integer"
+       },
+       "eligible": {
+        "type": "integer"
+       },
+       "level": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "activation_id",
+       "stage",
+       "devices"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "activation.stage.delivered"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "activation_id": {
+        "type": "string"
+       },
+       "stage": {
+        "type": "integer"
+       },
+       "devices": {
+        "type": "integer"
+       },
+       "sent": {
+        "type": "integer"
+       },
+       "confirmed": {
+        "type": "integer"
+       },
+       "duration_ms": {
+        "type": "integer"
+       },
+       "reduction_kw_est": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "activation_id",
+       "stage",
+       "devices",
+       "sent",
+       "confirmed"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "activation.ended"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "activation_id": {
+        "type": "string"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "devices": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "activation_id",
+       "reason"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "system.events_gap"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "from": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "to": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "from_id": {
+        "type": "string"
+       },
+       "to_id": {
+        "type": "string"
+       },
+       "reason": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "from",
+       "to",
+       "reason"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "limit.applied"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "command_id": {
+        "type": "integer"
+       },
+       "via": {
+        "enum": [
+         "loop",
+         "pwm",
+         "cp_report"
+        ]
+       },
+       "reaction_ms": {
+        "type": "integer",
+        "description": "command accepted by the API -> confirmed by the device"
+       }
+      },
+      "required": [
+       "command_id",
+       "via",
+       "reaction_ms"
+      ],
+      "additionalProperties": true
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "device.bound"
+     }
+    }
+   },
+   "then": {
+    "description": "The service layer bound the device to this operator (it may not have connected yet).",
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "binding_ver": {
+        "type": "integer",
+        "description": "version of the binding in the service layer's registry"
+       },
+       "type": {
+        "type": "string",
+        "description": "device type from the service layer (for reports; the server's behaviour does not depend on it)"
+       },
+       "rules": {
+        "type": "object",
+        "description": "the device's business rules as the layer gave them (docs/rules.md); present when the message carried them"
+       },
+       "tz": {
+        "type": "string",
+        "description": "the user's time zone"
+       },
+       "previous": {
+        "type": "string",
+        "enum": [
+         "bound",
+         "unbound",
+         "revoked"
+        ],
+        "description": "registry state before"
+       },
+       "lat": {
+        "type": "number"
+       },
+       "lon": {
+        "type": "number"
+       },
+       "limits_cancelled": {
+        "type": "integer",
+        "description": "device.unbound: limits in force that were cancelled"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "device.unbound"
+     }
+    }
+   },
+   "then": {
+    "description": "The device left this operator: out of the activation pool, its limits cancelled; a running session goes on.",
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "binding_ver": {
+        "type": "integer",
+        "description": "version of the binding in the service layer's registry"
+       },
+       "type": {
+        "type": "string",
+        "description": "device type"
+       },
+       "tz": {
+        "type": "string",
+        "description": "the user's time zone"
+       },
+       "previous": {
+        "type": "string",
+        "enum": [
+         "bound",
+         "unbound",
+         "revoked"
+        ],
+        "description": "registry state before"
+       },
+       "lat": {
+        "type": "number"
+       },
+       "lon": {
+        "type": "number"
+       },
+       "limits_cancelled": {
+        "type": "integer",
+        "description": "device.unbound: limits in force that were cancelled"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "device.revoked"
+     }
+    }
+   },
+   "then": {
+    "description": "The service layer revoked the device: served no more.",
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "binding_ver": {
+        "type": "integer",
+        "description": "version of the binding in the service layer's registry"
+       },
+       "type": {
+        "type": "string",
+        "description": "device type"
+       },
+       "tz": {
+        "type": "string",
+        "description": "the user's time zone"
+       },
+       "previous": {
+        "type": "string",
+        "enum": [
+         "bound",
+         "unbound",
+         "revoked"
+        ],
+        "description": "registry state before"
+       },
+       "lat": {
+        "type": "number"
+       },
+       "lon": {
+        "type": "number"
+       },
+       "limits_cancelled": {
+        "type": "integer",
+        "description": "device.unbound: limits in force that were cancelled"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "system.registry_mismatch"
+     }
+    }
+   },
+   "then": {
+    "description": "The layer's daily digest did not match the stored registry; the registry is read again.",
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "layer_bound": {
+        "type": "integer"
+       },
+       "bound": {
+        "type": "integer"
+       },
+       "layer_max_binding_ver": {
+        "type": "integer"
+       },
+       "max_binding_ver": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "type": {
+      "const": "device.supply_window"
+     }
+    }
+   },
+   "then": {
+    "description": "Business rule supply: a charging window for the device's own battery (a limit and a CP restart pulse).",
+    "properties": {
+     "data": {
+      "type": "object",
+      "properties": {
+       "battery_pct": {
+        "type": "number",
+        "description": "the device's battery as it reported it"
+       },
+       "below_pct": {
+        "type": "number",
+        "description": "the rule's threshold"
+       },
+       "limit_a": {
+        "type": "number",
+        "description": "current of the window"
+       },
+       "minutes": {
+        "type": "integer"
+       },
+       "command_id": {
+        "type": "integer",
+        "description": "the window's limit (source device_supply)"
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

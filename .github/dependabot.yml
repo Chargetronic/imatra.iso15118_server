@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /engine
+    schedule: { interval: weekly }
+    groups: { go: { patterns: ["*"] } }
+  - package-ecosystem: pip
+    directory: /api
+    schedule: { interval: weekly }
+    groups: { python: { patterns: ["*"] } }
+  - package-ecosystem: docker
+    directories: ["/api", "/engine", "/engine/cmd/fleetgen", "/mqtt", "/pki", "/gateway"]
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }

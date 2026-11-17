@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+{
+	admin off
+	order rate_limit before reverse_proxy
+	# The client address for the rate limits ({client_ip}) is taken from
+	# X-Forwarded-For only when the request comes from a trusted proxy:
+	# TRUSTED_PROXIES, none by default (the gateway faces the internet);
+	# compose.behind-proxy.yml sets private_ranges for the operator's own proxy.
+	servers {
+		trusted_proxies static {$TRUSTED_PROXIES:127.0.0.1/32}
+	}
+}
+
+# The only HTTP entry of the deployment: /v1 (operator keys) and /health.
+# No UI, no MQTT over WebSocket (devices: mTLS on 8883).
+#
+# SITE_ADDRESS: the deployment's domain; Caddy gets and renews its certificate
+# (Let's Encrypt, ports 80/443) — TLS is the default. Behind a reverse proxy of
+# your own that does TLS: compose.behind-proxy.yml sets SITE_ADDRESS to ":8080".
+#
+# Rate limit per operator key (X-API-Key), RATE_LIMIT_PER_MIN requests a
+# minute (default 600), and per client address for requests without a key
+# (RATE_LIMIT_ANON_PER_MIN, default 60). Requests with a key are also limited
+# per client address (RATE_LIMIT_KEYED_ADDR_PER_MIN, default 1200), so that
+# made-up keys do not each get a budget of their own. Over a limit: 429 with
+# Retry-After.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	handle /health {
+		rate_limit {
+			zone health {
+				key {client_ip}
+				events {$RATE_LIMIT_ANON_PER_MIN:60}
+				window 1m
+			}
+		}
+		reverse_proxy api:8000
+	}
+
+	@keyed header X-API-Key *
+	handle @keyed {
+		rate_limit {
+			zone operator_key {
+				key {http.request.header.X-API-Key}
+				events {$RATE_LIMIT_PER_MIN:600}
+				window 1m
+			}
+			zone keyed_address {
+				key {client_ip}
+				events {$RATE_LIMIT_KEYED_ADDR_PER_MIN:1200}
+				window 1m
+			}
+		}
+		handle /v1/* {
+			reverse_proxy api:8000
+		}
+		handle {
+			respond "not found" 404
+		}
+	}
+
+	handle /v1/* {
+		rate_limit {
+			zone anonymous {
+				key {client_ip}
+				events {$RATE_LIMIT_ANON_PER_MIN:60}
+				window 1m
+			}
+		}
+		reverse_proxy api:8000
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

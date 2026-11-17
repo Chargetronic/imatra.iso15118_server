@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+# Load test with the generator on another host (loadtest/server-up.sh with
+# LT_BIND set): the operator API on the private address only, for fleetgen's
+# activations. The broker is published by docker-compose.yml (PUBLIC_TCP_PORT).
+services:
+  api:
+    ports: ["${LT_BIND:?}:8100:8000"]

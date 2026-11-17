@@ -1,0 +1,33 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security vulnerabilities go to SECURITY.md, not here. Remove secrets, keys and host names from logs.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Deployment
+      description: Number of engines, PKI_MODE, behind your own proxy or not, host size.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what you expected
+      description: The device and the vehicle (ISO 15118-2, DIN 70121 or PWM), the steps to reproduce; a fleetgen reproduction helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines of the engine and the API.
+      render: text

@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+# Security and licence checks: known vulnerabilities (govulncheck, pip-audit,
+# trivy on the built images), static analysis (gosec, bandit), the licences of
+# the dependencies (go-licenses, pip-licenses), the start-up check of the
+# secrets (pki/preflight.sh). Also weekly, for vulnerabilities published after
+# the last change. No secrets used, nothing published.
+name: Security
+on:
+  push:
+    branches: [main]  # branches are checked by their pull request (saves CI minutes)
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    env:
+      LIBCBV2G_TAG: v0.3.2
+      CGO_ENABLED: '1'
+      CGO_CFLAGS: -I/opt/cbv2g/include
+      CGO_LDFLAGS: -L/opt/cbv2g/lib
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          cache: false
+      - uses: actions/cache@v6
+        id: cbv2g
+        with:
+          path: /opt/cbv2g
+          key: libcbv2g-${{ env.LIBCBV2G_TAG }}-ubuntu-24.04
+      - name: libcbv2g (as in engine/Dockerfile)
+        if: steps.cbv2g.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+          git clone --depth 1 --branch "$LIBCBV2G_TAG" https://github.com/EVerest/libcbv2g.git /tmp/libcbv2g
+          cmake -S /tmp/libcbv2g -B /tmp/libcbv2g/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=/opt/cbv2g
+          cmake --build /tmp/libcbv2g/build
+          sudo cmake --install /tmp/libcbv2g/build
+      - name: tools
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install github.com/google/go-licenses@latest
+      - name: govulncheck (known vulnerabilities reachable from the code; fails on any)
+        working-directory: engine
+        run: govulncheck ./...
+      - name: gosec (static analysis; findings are listed, reviewed in docs/security-review.md)
+        working-directory: engine
+        run: gosec -no-fail -fmt text -exclude-generated ./...
+      - name: go-licenses (licences of the linked modules; fails on a forbidden or unknown one)
+        working-directory: engine
+        run: |
+          go-licenses report ./... --ignore github.com/chargetronic/imatra.iso15118_server 2>/dev/null | sort -u
+          go-licenses check ./... --ignore github.com/chargetronic/imatra.iso15118_server --disallowed_types=forbidden,restricted,unknown
+
+  api:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r api/requirements.txt pip-audit pip-licenses bandit
+      - name: pip-audit (known vulnerabilities; fails on any)
+        run: pip-audit -r api/requirements.txt
+      - name: bandit (static analysis; fails on a finding not reviewed)
+        run: bandit -r api/app
+      - name: pip-licenses (licences of the installed packages)
+        run: pip-licenses --from=mixed --format=markdown --with-urls --ignore-packages pip-audit pip-licenses bandit
+
+  images:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: build every image of docker-compose.yml
+        run: |
+          cp .env.example .env
+          docker compose build
+      - name: preflight refuses the example .env and accepts real secrets
+        run: |
+          if docker compose run --rm --no-deps preflight; then
+            echo "preflight accepted the example .env"; exit 1
+          fi
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 24)/; s/^MQTT_SERVER_PASSWORD=.*/MQTT_SERVER_PASSWORD=$(openssl rand -hex 24)/; s/^OPERATOR_API_KEYS=.*/OPERATOR_API_KEYS=\"admin:$(openssl rand -hex 24)\"/" .env
+          docker compose run --rm --no-deps preflight
+      - name: gateway configuration, also behind the operator's proxy
+        run: |
+          docker compose run --rm --no-deps --entrypoint caddy gateway validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker compose -f docker-compose.yml -f compose.behind-proxy.yml run --rm --no-deps --entrypoint caddy gateway validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: trivy (known vulnerabilities in the images; a fixable high or critical one fails our images, is reported for the upstream ones)
+        run: |
+          scan() { docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME/.cache/trivy:/root/.cache/" \
+            aquasec/trivy:latest image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --no-progress "$@"; }
+          for i in $(docker compose config --images | sort -u); do
+            echo "::group::$i"
+            case "$i" in
+              imatra-*) scan --exit-code 1 "$i" || fail=1 ;;
+              *) scan --exit-code 0 "$i" ;;   # postgres, valkey: upstream images, updated by their tags (Dependabot)
+            esac
+            echo "::endgroup::"
+          done
+          exit ${fail:-0}

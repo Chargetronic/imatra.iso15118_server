@@ -1,0 +1,229 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Contributors to the project. See NOTICE.
+
+# One deployment of the cloud ISO 15118 server. Everything it needs lives in this one
+# compose project: configuration is baked into the images built from this
+# repository, state lives in named volumes, secrets in .env (from .env.example).
+#   docker compose up -d --build                 minimal: one engine
+#   docker compose up -d --build --scale engine=2  reference: 5 000 devices on 2 vCPU
+# Moving to another host = scripts/export.sh here, scripts/import.sh
+# there, change the DNS record.
+name: ${COMPOSE_PROJECT_NAME:-imatra}
+
+x-defaults: &defaults
+  restart: unless-stopped
+  env_file: .env
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  # One-shot, first on every "up": refuses empty, example or short secrets in
+  # .env (pki/preflight.sh). The PKI, the broker and the database wait for it.
+  preflight:
+    build: ./pki
+    env_file: .env
+    entrypoint: ["/usr/local/bin/preflight.sh"]
+    restart: "no"
+
+  # One-shot: the deployment's PKI (pki/pki-init.sh). PKI_MODE=own (default):
+  # the deployment's own CA, created once, and the broker certificate; device
+  # certificates: `docker compose run --rm -T pki-init device <id>`.
+  # PKI_MODE=layer: the CA of this cloud and the broker certificate come from
+  # the service layer (`pki-init import`). Idempotent.
+  pki-init:
+    build: ./pki
+    env_file: .env
+    volumes: ["pki:/pki"]
+    depends_on:
+      preflight: { condition: service_completed_successfully }
+    restart: "no"
+
+  # One-shot: the services' password file (account "server", listener 1883)
+  # from .env on every start. Devices have no passwords: client certificate on 8883.
+  mqtt-init:
+    build: ./mqtt
+    env_file: .env
+    entrypoint: ["/usr/local/bin/mqtt-init.sh"]
+    volumes: ["mqtt-auth:/mosquitto/auth"]
+    depends_on:
+      preflight: { condition: service_completed_successfully }
+    restart: "no"
+
+  mqtt:
+    <<: *defaults
+    build: ./mqtt
+    ports:
+      # Public by design: devices connect here, TLS with a client certificate.
+      - "${PUBLIC_TCP_PORT}:8883"
+    volumes:
+      - "pki:/pki:ro"
+      # read-write: mqtt-run.sh renders the devices' ACL (local block, the
+      # layer's account) into acl-devices and keeps the last list in "blocked"
+      - "mqtt-auth:/mosquitto/auth"
+      - "mqtt-data:/mosquitto/data"
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+      mqtt-init: { condition: service_completed_successfully }
+    # one socket per device: 20 000 devices and their reconnects
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    mem_limit: ${MQTT_MEM_LIMIT:-128m}
+
+  postgres:
+    <<: *defaults
+    image: postgres:16-alpine
+    # Defaults fit a small VPS; for a larger machine see the PG_* values in
+    # .env.example. Durable commit stays
+    # on: commands and the feed are records. The engines' history writes use
+    # their own small pool with asynchronous commit (store.OpenBackground).
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-96MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+      - -c
+      - checkpoint_timeout=${PG_CHECKPOINT_TIMEOUT:-10min}
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_compression=on
+      - -c
+      - random_page_cost=${PG_RANDOM_PAGE_COST:-1.1}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
+      - -c
+      - autovacuum_vacuum_scale_factor=0.05
+      - -c
+      - autovacuum_analyze_scale_factor=0.02
+      - -c
+      - log_min_duration_statement=${PG_LOG_SLOW_MS:-500}
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    depends_on:
+      preflight: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: ${PG_SHM_SIZE:-128m}
+    mem_limit: ${PG_MEM_LIMIT:-384m}
+
+  api:
+    <<: *defaults
+    build: ./api
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+
+  # Cloud ISO 15118 SECC: answers the V2G requests tunnelled by devices.
+  # Stateless: the session state lives in Valkey (ADR-002); restart at will.
+  # One engine (minimal) or two (reference, 5 000 devices on 2 vCPU):
+  #   docker compose up -d --scale engine=2
+  # The instances share the device topics ($share/engine/...) and agree on a
+  # leader in Valkey; more than two, or engines on other hosts, the
+  # architecture allows but nobody has measured.
+  engine:
+    <<: *defaults
+    build: ./engine
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      mqtt: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/engine", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: ${ENGINE_MEM_LIMIT:-64m}
+
+  # Operator tables: domain_events -> device_live,
+  # session_summaries, device_attributes. One active instance (advisory lock);
+  # Rebuild from the feed: `docker compose stop projector && docker compose run --rm
+  # projector -rebuild` (it then keeps following; Ctrl-C and start the service).
+  projector:
+    <<: *defaults
+    build: ./engine
+    entrypoint: ["/usr/local/bin/projector"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/projector", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 64m
+
+  # Working state of the deployment (ADR-002): running sessions, activation pool,
+  # engine coordination, the event stream before the relay stores it.
+  valkey:
+    <<: *defaults
+    image: valkey/valkey:8-alpine
+    # ADR-002: the working state of the sessions. AOF every second; a
+    # memory limit of its own below the container's, without eviction: when
+    # full, writes fail with an error instead of keys of running sessions
+    # silently disappearing (or the process being killed by the kernel).
+    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "",
+              "--maxmemory", "${VALKEY_MAXMEMORY:-200mb}", "--maxmemory-policy", "noeviction"]
+    volumes: ["valkey-data:/data"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # keep the memory limit ~25 % above maxmemory; EVENTS_STREAM_MAX must fit
+    # in it (~200 bytes an entry): the backlog while no relay runs
+    mem_limit: ${VALKEY_MEM_LIMIT:-256m}
+
+  # Operator event feed: Valkey stream "events"
+  # -> Postgres domain_events, at least once, no duplicates; reports gaps.
+  # Same image as the engine. Refuses a Valkey without AOF.
+  relay:
+    <<: *defaults
+    build: ./engine
+    entrypoint: ["/usr/local/bin/relay"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/relay", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 64m
+
+  # The only HTTP entry point: /health for the host, /v1 for the operator
+  # (operator keys); rate limits per key and per address (gateway/Caddyfile).
+  gateway:
+    <<: *defaults
+    build: ./gateway
+    # TLS for SITE_ADDRESS (Let's Encrypt); behind your own proxy: compose.behind-proxy.yml
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: "${SITE_ADDRESS:?set SITE_ADDRESS in .env}"
+    depends_on:
+      api: { condition: service_started }
+    volumes: ["caddy-data:/data"]
+    mem_limit: 64m
+
+volumes:
+  pki: {}
+  mqtt-auth: {}
+  mqtt-data: {}
+  pg-data: {}
+  caddy-data: {}
+  valkey-data: {}
