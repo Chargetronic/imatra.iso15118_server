@@ -5,5 +5,6 @@ All participants in the project agree to abide by the
 
 Please report violations or concerns to the project lead at
 cto@chargetronic.fi. If the report concerns the project lead, or you prefer
-someone else, write to Mikhail Vershov at mihrak@gmail.com. Reports are
+someone else, write to conduct@chargetronic.fi (read by Mikhail Vershov, not by the
+project lead). Reports are
 handled confidentially.
