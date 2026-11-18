@@ -172,4 +172,6 @@ peer.
 ## License
 
 [Apache License 2.0](LICENSE); notices: [NOTICE](NOTICE); third-party
-components and their licences: [THIRD_PARTY.md](THIRD_PARTY.md).
+components and their licences: [THIRD_PARTY.md](THIRD_PARTY.md). Patents: the
+server is free to use; equipment on this architecture is licensed separately,
+see [PATENTS.md](PATENTS.md).

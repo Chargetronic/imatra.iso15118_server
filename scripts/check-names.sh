@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."
 WORDS='smart ?plug|wallbox|chargetronic cloud|imatra|mikkeli|tampere|helsinki'
 # allowed: packaging and documentation; this script; the load-test kit (it names
 # the test harness repository and the compose project the harness starts)
-ALLOW='^(loadtest/|README\.md|docs/deployment\.md|NOTICE|THIRD_PARTY\.md|LICENSE|GOVERNANCE\.md|CONTRIBUTING\.md|SECURITY\.md|SUPPORT\.md|ROADMAP\.md|CHANGELOG\.md|RELEASE\.md|CODE_OF_CONDUCT\.md|COMMITTERS\.csv|scripts/check-names\.sh|\.github/)'
+ALLOW='^(loadtest/|README\.md|docs/deployment\.md|NOTICE|PATENTS\.md|THIRD_PARTY\.md|LICENSE|GOVERNANCE\.md|CONTRIBUTING\.md|SECURITY\.md|SUPPORT\.md|ROADMAP\.md|CHANGELOG\.md|RELEASE\.md|CODE_OF_CONDUCT\.md|COMMITTERS\.csv|scripts/check-names\.sh|\.github/)'
 found=$(git grep -niE "$WORDS" -- . ':!*.sum' \
   | grep -vE "$ALLOW" \
   | grep -vE 'github\.com/chargetronic/imatra\.iso15118_server|ghcr\.io/chargetronic/imatra\.iso15118_server|EDITION = "imatra"|title="Imatra|COMPOSE_PROJECT_NAME:-imatra|name: \$\{COMPOSE_PROJECT_NAME|POSTGRES_(DB|USER)=imatra|Europe/Helsinki|imatra-(engine|api|gateway|mqtt|pki)' \
