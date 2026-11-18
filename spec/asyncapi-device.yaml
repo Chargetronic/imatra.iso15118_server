@@ -263,7 +263,8 @@ components:
 
   parameters:
     deviceId:
-      description: Device id = CN of the device's certificate.
+      description: >-
+        Device id = CN of the device's certificate. 3 to 63 characters, lowercase letters a-z, digits and '-', not starting with '-' (pattern ^[a-z0-9][a-z0-9-]{2,62}$); 'server' and 'layer' are reserved.
       examples: ['dev-01']
 
   messages:

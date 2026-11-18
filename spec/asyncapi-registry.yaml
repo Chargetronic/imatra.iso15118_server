@@ -121,7 +121,7 @@ components:
       required: [v, device_id, state, binding_ver, at]
       properties:
         v: { type: integer, const: 1 }
-        device_id: { type: string, description: 'The device (its certificate CN)' }
+        device_id: { type: string, pattern: '^[a-z0-9][a-z0-9-]{2,62}$', description: "The device (its certificate CN). 3 to 63 characters: a-z, 0-9, '-', not starting with '-'; 'server' and 'layer' are reserved" }
         state:
           type: string
           enum: [bound, unbound, revoked]

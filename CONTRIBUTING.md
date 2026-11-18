@@ -35,6 +35,16 @@ sign-off are not merged; CI checks it.
 To add a missing sign-off to the last commit: `git commit --amend -s`; to a
 series: `git rebase --signoff main`.
 
+## Contributions made with AI assistants
+
+You may use AI assistants to write code, tests or documentation. The person
+who signs off the commit is its author: by the sign-off they certify the DCO
+for the whole change, have reviewed and understood it, and answer for it in
+review. An assistant is never the author or the signer of a commit. Naming
+it in a `Co-Authored-By:` trailer is welcome but not required. Do not paste
+other people's code, or confidential material, into an assistant to produce
+a contribution.
+
 ## Licence and file headers
 
 The project is licensed under the [Apache License 2.0](LICENSE); contributions

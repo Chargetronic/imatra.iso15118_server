@@ -15,7 +15,7 @@ package main
 //     (guardedClient below: V2G answers, pairs, limits, settings);
 //   - the leader publishes the set, retained, on "svc/blocked"; the broker
 //     container renders it into a deny section of the device ACL and reloads
-//     (deploy/mqtt/mqtt-run.sh), so the broker itself stops the device's
+//     (mqtt/mqtt-run.sh), so the broker itself stops the device's
 //     topics both ways while its TLS connection stays up.
 //
 // A device just blocked is reported offline (feed device.offline with
