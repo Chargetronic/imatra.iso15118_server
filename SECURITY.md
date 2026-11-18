@@ -2,13 +2,12 @@
 
 ## Supported versions
 
-No version has been released yet. From the first release, security fixes go
-into the latest minor version; this table is updated with every release
-([RELEASE.md](RELEASE.md)).
+Security fixes go into the latest minor version; this table is updated with
+every release ([RELEASE.md](RELEASE.md)).
 
 | Version | Supported |
 |---|---|
-| `main` (unreleased) | yes |
+| 0.1.x | yes |
 
 ## Reporting a vulnerability
 
