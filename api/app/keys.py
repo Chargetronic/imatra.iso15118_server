@@ -35,8 +35,8 @@ def main(argv=None) -> int:
                 print(e, file=sys.stderr)
                 return 2
             auth.audit("cli", "key.create", 201, request={"name": a.name, "rights": a.rights})
-            print(key)
-            print("Store it now: only its hash is kept.", file=sys.stderr)
+            print("Store it now: only its hash is kept.", file=sys.stderr, flush=True)
+            print(key, flush=True)
         elif a.cmd == "list":
             for name, prefix, rights, source, created, revoked, used in conn.execute(
                     "SELECT name, prefix, rights, source, created_at, revoked_at, last_used_at "

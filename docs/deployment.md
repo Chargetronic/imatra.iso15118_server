@@ -14,6 +14,17 @@ operator of a deployment is responsible for: [operator.md](operator.md).
 | Network | a DNS name for the deployment; ports open from the internet: **80, 443** (API over HTTPS, Let's Encrypt) and **8883** (devices, MQTT over TLS) | the same |
 | Engines | one | two (`--scale engine=2`) |
 
+On a fresh Ubuntu: Docker Engine and the Compose plugin from Docker's
+repository ([docs.docker.com/engine/install/ubuntu](https://docs.docker.com/engine/install/ubuntu/)),
+or the distribution's packages (`sudo apt install docker.io docker-compose-v2`,
+Ubuntu 24.04 and later). Then:
+
+```sh
+sudo usermod -aG docker $USER        # log in again
+docker compose version
+timedatectl | grep synchronized      # "System clock synchronized: yes"
+```
+
 Use dedicated vCPUs for a fleet: on shared vCPUs the answer time to the
 vehicles depends on the neighbours. Behind a TLS proxy of your own the
 gateway needs no ports 80/443 (section 3.4).
@@ -40,12 +51,14 @@ Fill in `.env` (every setting is explained in the file):
 
 Values containing `$` must be in single quotes. The deployment does not
 start while a password or key is empty, shorter than 16 characters or still
-an example value (`pki/preflight.sh` stops it with a message).
+an example value: `pki/preflight.sh` stops it. Compose then prints only
+`service "preflight" didn't complete successfully`; the reason is in
+`docker compose logs preflight`. The check runs after the images are built.
 
 ```sh
 docker compose up -d --build                      # one engine
 docker compose up -d --build --scale engine=2     # reference: two engines
-docker compose ps                                  # all services "healthy" or "running"
+docker compose ps                                  # "healthy"; gateway and mqtt, without a health check: "Up"
 curl -s https://$SITE_ADDRESS/health               # {"status":"ok", ...}
 ```
 
@@ -65,6 +78,15 @@ The deployment creates its CA on the first start (volume `pki`).
 docker compose run --rm -T pki-init ca > ca.crt                         # devices pin this CA
 docker compose run --rm -T pki-init device dev-01 > dev-01.pem          # key + certificate
 docker compose run --rm -T pki-init sign dev-01 < dev-01.csr > dev-01.crt   # the key stays on the device
+```
+
+The CA key stays in the `pki` volume. Only for a test with the virtual fleet
+`fleetgen`, which signs its devices itself, copy it out (the volume name
+starts with the Compose project name, by default the folder name) and delete
+the copy afterwards:
+
+```sh
+docker run --rm -v imatra_pki:/p:ro alpine cat /p/ca.key > ca.key && chmod 600 ca.key
 ```
 
 Certificates are valid for `DEVICE_CERT_DAYS` (365). Renewal, revocation and
@@ -112,15 +134,27 @@ directly: a proxy must not terminate that TLS.
 
 ## 4. Operator keys
 
-The key in `OPERATOR_API_KEYS` has all rights and is meant for the first
-start. Create keys with the rights each system needs, then remove the first
-key from `.env`:
+Every call carries the key in the header `X-API-Key`:
 
 ```sh
-docker compose exec api python -m app.keys create vpp --rights read,control
-docker compose exec api python -m app.keys list
-docker compose exec api python -m app.keys revoke vpp
+curl -s -H "X-API-Key: $KEY" https://$SITE_ADDRESS/v1/devices
 ```
+
+The key in `OPERATOR_API_KEYS` has all rights and is meant for the first
+start. Create keys with the rights each system needs, then remove the first
+key from `.env` and recreate the API (`restart` keeps the old environment):
+
+```sh
+docker compose exec -T api python -m app.keys create vpp --rights read,control 2>/dev/null > vpp.key
+docker compose exec api python -m app.keys list
+# remove the first key from OPERATOR_API_KEYS in .env, then:
+docker compose up -d api           # the key is revoked at the start
+docker compose exec api python -m app.keys revoke vpp     # any key, by name
+```
+
+`create` prints the key once on standard output (the reminder to store it
+goes to standard error); only its hash is kept. A revoked key stops working
+within 30 s.
 
 Rights: `read` (devices, sessions, event feed), `control` (limits,
 activations, device settings, block), `debug` (V2G journal of devices with
@@ -131,7 +165,7 @@ API description: `GET /v1/openapi.json`.
 
 | Check | How |
 |---|---|
-| Services | `docker compose ps`: all healthy |
+| Services | `docker compose ps`: "healthy" (gateway and mqtt have no health check: "Up") |
 | API | `curl -s https://$SITE_ADDRESS/health` — `status` ok, database and broker reachable, lag of the operator tables |
 | Engines | `/live`, `/ready` and `/metrics` on port 8090 inside the compose network ([metrics.md](metrics.md)): exactly one leader |
 | A device end to end | section 3.3 |
@@ -145,7 +179,7 @@ session with TLS and without, operator commands, the layer away, the registry.
 
 ```sh
 git fetch --tags && git checkout v0.1.1           # the new release
-scripts/export.sh /root/backup                    # a backup first (section 7)
+scripts/export.sh ~/backup                        # a backup first (section 7)
 docker compose up -d --build --scale engine=2
 docker compose ps
 ```
@@ -163,8 +197,8 @@ the database (`pg_dump`), the PKI (CA key and broker certificate), the broker's
 retained messages, the gateway's certificates, `.env` and the running commit.
 
 ```sh
-scripts/export.sh /root/backup                    # on the old host (a daily cron job is a good backup)
-scp /root/backup/deployment-export-*.tar new-host:
+scripts/export.sh ~/backup                        # on the old host (a daily cron job is a good backup)
+scp ~/backup/deployment-export-*.tar new-host:
 # on the new host:
 git clone https://github.com/chargetronic/imatra.iso15118_server.git && cd imatra.iso15118_server
 git checkout <commit from the archive>
@@ -174,6 +208,15 @@ scripts/import.sh ~/deployment-export-*.tar [--behind-proxy]
 Then point the DNS names to the new host. The archive holds the CA key and
 all passwords: keep it `chmod 600`, off the host, and delete copies you no
 longer need. `import.sh` refuses to overwrite existing volumes or `.env`.
+
+Restore on the same host (after lost data, or to test the backup):
+
+```sh
+docker compose down -v                            # removes the volumes: the data is in the archive
+mv .env .env.before-restore                       # the archive brings its own .env
+scripts/import.sh ~/backup/deployment-export-*.tar
+docker compose up -d --scale engine=2             # import.sh starts one engine
+```
 
 What is not in a backup: the event stream entries not yet stored in Postgres
 (a few seconds) and the working state of running sessions in Valkey; after a
@@ -197,7 +240,7 @@ operator see:
 
 | Component | Effect | What to do |
 |---|---|---|
-| One of two engines | the other takes over; the leader changes within 5–8 s | none; Docker restarts it |
+| One of two engines | the other takes over; the leader changes within 5–8 s | none: Docker restarts a crashed engine; one stopped by hand stays stopped: `docker compose up -d --scale engine=2` |
 | The only engine | no answers to the vehicles until it is back; devices answer charging from their cache until the TTL (20 min) | `docker compose up -d` |
 | Valkey restarts (AOF) | up to ~1 s lost; sessions go on; a gap in the feed is marked | none |
 | Valkey data lost | running digital sessions restart; limits and the pool come back from Postgres | none |

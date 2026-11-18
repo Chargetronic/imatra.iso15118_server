@@ -52,7 +52,8 @@ curl -s https://$SITE_ADDRESS/health              # {"status":"ok", ...}
 The gateway serves `/v1` and `/health` over HTTPS for `SITE_ADDRESS` (its own
 Let's Encrypt certificate, ports 80/443), with a rate limit per operator key.
 Behind a TLS proxy of your own: add `-f compose.behind-proxy.yml`. To try the
-API, read `GET /v1/openapi.json` with the operator key from `.env`; the device
+API, read `GET /v1/openapi.json` with the operator key from `.env` in the
+header `X-API-Key` (`curl -H "X-API-Key: $KEY" https://<SITE_ADDRESS>/v1/openapi.json`); the device
 protocol is in `engine/internal/tunnel`.
 
 ## Documentation

@@ -48,7 +48,7 @@ pair `installed`; power `applied` (PWM profile in a session), `held`
 1. Devices connect with client certificates (CN = `fleet-NNNNN`, `-prefix`), which
    fleetgen signs itself with a **test** CA: `-client-ca ca.crt -client-ca-key ca.key`.
    On a deployment in `PKI_MODE=own` that is the deployment's CA (`docker compose run --rm
-   pki-init ca`, the key in the `pki` volume); for a test with the service layer,
+   pki-init ca`; the key from the `pki` volume: `docs/deployment.md`, section 3.1); for a test with the service layer,
    the test copy of the layer's cloud root. No accounts on the server.
 2. An operator key for the activation: `OPERATOR_API_KEYS="fleet:<key of 16+ chars>"`.
 3. Mosquitto: the default `MQTT_MEM_LIMIT` (128m in `docker-compose.yml`) is too
@@ -62,7 +62,7 @@ pair `installed`; power `applied` (PWM profile in a session), `held`
 ```sh
 # from engine/
 docker build -f cmd/fleetgen/Dockerfile -t fleetgen .
-docker run --rm -v "$PWD:/out" -e FLEET_API_KEY=... fleetgen \
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/out" -e FLEET_API_KEY=... fleetgen \
   -broker ssl://deployment.example:8883 -ca /out/ca.crt \
   -client-ca /out/ca.crt -client-ca-key /out/ca.key \
   -n 1000 -plug-frac 0.65 -plug-spread 90s -charge 3m -duration 5m \
@@ -70,6 +70,7 @@ docker run --rm -v "$PWD:/out" -e FLEET_API_KEY=... fleetgen \
   -report /out/base-1k.json
 ```
 
+`--user` lets the generator read the key files (mode 600) of the mounted folder.
 Run the generator on a separate VM, not on the server under test. One process
 handles about 10 000 connections; split a bigger fleet with `-start`/`-n`
 over several processes or hosts and merge the reports.
