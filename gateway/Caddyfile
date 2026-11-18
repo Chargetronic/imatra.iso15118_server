@@ -40,25 +40,29 @@
 		reverse_proxy api:8000
 	}
 
+	# route keeps the order as written: in a plain handle block Caddy sorts the
+	# directives and the nested handle (terminal) would run before rate_limit
 	@keyed header X-API-Key *
 	handle @keyed {
-		rate_limit {
-			zone operator_key {
-				key {http.request.header.X-API-Key}
-				events {$RATE_LIMIT_PER_MIN:600}
-				window 1m
+		route {
+			rate_limit {
+				zone operator_key {
+					key {http.request.header.X-API-Key}
+					events {$RATE_LIMIT_PER_MIN:600}
+					window 1m
+				}
+				zone keyed_address {
+					key {client_ip}
+					events {$RATE_LIMIT_KEYED_ADDR_PER_MIN:1200}
+					window 1m
+				}
 			}
-			zone keyed_address {
-				key {client_ip}
-				events {$RATE_LIMIT_KEYED_ADDR_PER_MIN:1200}
-				window 1m
+			handle /v1/* {
+				reverse_proxy api:8000
 			}
-		}
-		handle /v1/* {
-			reverse_proxy api:8000
-		}
-		handle {
-			respond "not found" 404
+			handle {
+				respond "not found" 404
+			}
 		}
 	}
 
