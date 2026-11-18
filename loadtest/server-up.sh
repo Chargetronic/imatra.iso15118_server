@@ -33,6 +33,16 @@ fi
 umask 077
 mkdir -p "$LT"
 
+# an .env of another deployment is never reused: the kit hands out its CA key
+if [ -f .env ] && ! grep -q '^# --- load test (loadtest/server-up.sh) ---' .env; then
+  echo ".env exists and was not written by loadtest/server-up.sh (a deployment of yours?)." >&2
+  echo "Run the load test in a separate checkout, or move .env away first." >&2
+  exit 1
+fi
+if [ -f .env ] && ! grep -q "^PKI_MODE=$LT_MODE\$" .env; then
+  echo ".env of an earlier load test has another PKI_MODE than LT_MODE=$LT_MODE: remove it (and the volumes: docker compose -p $P down -v)" >&2
+  exit 1
+fi
 if [ ! -f .env ]; then
   r() { openssl rand -hex "$1"; }
   KEY=$(r 24)
@@ -61,9 +71,12 @@ ENGINE_MEM_LIMIT=512m
 ENV
   # own mode: the broker certificate also names the private address
   [ "$LT_MODE" = own ] && [ -n "${LT_BIND:-}" ] && printf 'BROKER_IPS=%s\n' "$LT_BIND" >> .env
-  printf 'FLEET_API_KEY=%s\n' "$KEY" > "$LT/secrets"
-  echo ".env written; operator key in $LT/secrets"
+  echo ".env written"
 fi
+# the operator key for the generator, from .env (also when .env was kept from an earlier run)
+KEY=$(sed -n 's/^OPERATOR_API_KEYS="\{0,1\}loadtest:\([^ "]*\).*/\1/p' .env)
+[ -n "$KEY" ] || { echo "no loadtest key in .env" >&2; exit 1; }
+printf 'FLEET_API_KEY=%s\n' "$KEY" > "$LT/secrets"
 
 if [ "$LT_MODE" = layer ]; then
   # the test layer and Imatra from this checkout, no test station
