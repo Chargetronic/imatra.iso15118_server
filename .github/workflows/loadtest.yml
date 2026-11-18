@@ -4,11 +4,10 @@
 # The load-test kit end to end on the runner, in its default mode (this
 # repository alone, PKI_MODE=own): a deployment with two engines, 20 virtual
 # devices over mTLS for a minute, the report. Checks that the kit works, not
-# capacity. Runs when the kit, the server or the compose files change.
+# capacity. Started by hand (Actions > Load test kit > Run workflow): about
+# 15 runner minutes a run.
 name: Load test kit
 on:
-  pull_request:
-    paths: ['loadtest/**', 'engine/**', 'api/**', 'mqtt/**', 'pki/**', 'docker-compose.yml', '.github/workflows/loadtest.yml']
   workflow_dispatch:
 permissions:
   contents: read
