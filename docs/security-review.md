@@ -1,9 +1,8 @@
 # Security review of the first release
 
 Review of the interfaces a deployment exposes, its defaults and the static
-analysis findings, before the repository is opened (November 2026). The
-negative tests listed in "To confirm under load" are run by the release's
-functional test; their results are added here.
+analysis findings, before the repository is opened (November 2026), and the
+results of the negative tests against a running deployment ("Negative tests").
 
 How to report a vulnerability: [SECURITY.md](../SECURITY.md).
 
@@ -41,7 +40,7 @@ published in `docker-compose.yml`.
 | Only `/v1/*` and `/health` are routed; anything else 404; Caddy admin API off | yes (`gateway/Caddyfile`) |
 | `/docs` and `/openapi.json` of the API are not reachable from outside (not routed) | yes |
 | TLS by default (Let's Encrypt for `SITE_ADDRESS`) | yes |
-| Rate limit per operator key | yes, `RATE_LIMIT_PER_MIN` (600) |
+| Rate limit per operator key | yes, `RATE_LIMIT_PER_MIN` (600); did not apply before 18.11.2026, fixed (see "Negative tests") |
 | Rate limit per client address without a key | yes, `RATE_LIMIT_ANON_PER_MIN` (60) |
 | Made-up keys do not each get a budget of their own | fixed in this review: requests with a key are also limited per client address (`RATE_LIMIT_KEYED_ADDR_PER_MIN`, 1200) |
 | Behind the operator's proxy the limits see the real client, not the proxy | fixed in this review: `{client_ip}` with `TRUSTED_PROXIES` (none by default; `private_ranges` in `compose.behind-proxy.yml`) |
@@ -106,10 +105,33 @@ the reason.
   certificates last 7 days.
 - **Rate limits are per gateway process.** A deployment runs one gateway.
 
-## To confirm under load (functional test, F4-a)
+## Negative tests (18.11.2026)
 
-Negative tests against a running deployment: a certificate of another CA, an
-expired certificate, CN `server`, a device writing another device's topic or
-`registry/#`, a blocked device, a request without a key, with a revoked key,
-with a key without the right, made-up keys over the per-address limit, the
-API port and 1883 not reachable from outside.
+Scenario `t7` of the test environment (`compose/scenarios.sh t7`, see
+`docs/deployment.md`, section 5) against a running deployment, `PKI_MODE=layer`.
+An observer on the services' listener sees every message that gets through;
+each check has a control that must get through. Run on commit `45dc84a` (main with the gateway fix below),
+Hetzner, Ubuntu 26.04.
+
+| Check | Result |
+|---|---|
+| Client certificate of a foreign CA | connection refused |
+| Expired client certificate of the deployment's CA | connection refused |
+| CN `server` on 8883: write to `dev/<id>/…`, `registry/…`, `svc/…` | nothing gets through |
+| CN `+` and `#` (wildcards as user name) | nothing gets through |
+| A device writes to another device's topic and to `registry/#` | nothing gets through; its own topic does (control) |
+| A device subscribes to another device's topic | receives nothing; its own topic it does (control) |
+| Blocked device (`PUT /v1/devices/{id}/block`) | can neither publish nor receive; after unblocking it can again |
+| No key, a made-up key | 401 |
+| A key with `read` only | 200 on reads, 403 on a command |
+| A revoked key | 401 within 40 s |
+| `/docs`, `/openapi.json`, `/redoc`, `/metrics`, `/admin` | 404 |
+| 1883, Postgres, Valkey, the API, the engines' 8090, Caddy's admin on the host | not listening |
+| Requests without a key over `RATE_LIMIT_ANON_PER_MIN` | 429 |
+| One made-up key over `RATE_LIMIT_PER_MIN`; made-up keys over `RATE_LIMIT_KEYED_ADDR_PER_MIN` | 429 (600 and 1200 answered, the rest 429) |
+
+**Found and fixed by these tests:** the two limits for requests with a key
+(per key, and per address) did not apply at all: in the handle block for
+requests with `X-API-Key`, Caddy sorted the nested `handle` before
+`rate_limit`. `gateway/Caddyfile` now wraps them in `route`, which keeps the
+order as written.
