@@ -65,7 +65,7 @@ published in `docker-compose.yml`.
 Checked by CI on every change and weekly (`.github/workflows/security.yml`):
 govulncheck, pip-audit, trivy on every built image, go-licenses, pip-licenses.
 Found and fixed in this review: 26 vulnerabilities of the Go 1.24 standard
-library (toolchain moved to Go 1.26), Caddy 2.10 and its modules (2.11; golang.org/x/net raised to 0.62.0 in the build),
+library (toolchain moved to Go 1.27), Caddy 2.10 and its modules (2.11; golang.org/x/net raised to 0.62.0 in the build),
 alpine 3.20 (3.24), base packages of the images. Dependabot did not watch the
 Go module and the Dockerfiles (wrong folders); fixed.
 
@@ -95,7 +95,11 @@ the reason.
 - **Device ids in certificates of the service layer.** The broker takes the
   CN as the device id. A CN with `/` would map to a subtree of another device;
   `pki-init.sh` refuses such ids in `PKI_MODE=own`, in `PKI_MODE=layer` the
-  layer's CA must issue valid ids only.
+  layer's CA must issue valid ids only. The format is part of the layer
+  contract (`spec/asyncapi-layer.yaml`, `deviceId`; `spec/asyncapi-registry.yaml`,
+  `device_id`). A CN with `+` or `#` gets no access at all: Mosquitto denies
+  pattern-based access to such user names (since 1.4.12, CVE-2017-7650); a `/`
+  is not covered by the broker and rests on the layer.
 - **No certificate revocation list in `PKI_MODE=own`.** A device is cut off by
   the block list (its topics are denied at once); its certificate stays valid
   until it expires (`DEVICE_CERT_DAYS`, 365 by default). In `PKI_MODE=layer`

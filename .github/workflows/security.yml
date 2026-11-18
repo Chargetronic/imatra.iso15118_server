@@ -28,12 +28,12 @@ jobs:
       CGO_CFLAGS: -I/opt/cbv2g/include
       CGO_LDFLAGS: -L/opt/cbv2g/lib
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.27'
           cache: false
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cbv2g
         with:
           path: /opt/cbv2g
@@ -49,9 +49,9 @@ jobs:
           sudo cmake --install /tmp/libcbv2g/build
       - name: tools
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          go install github.com/google/go-licenses@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
+          go install github.com/google/go-licenses@v1.6.0
       - name: govulncheck (known vulnerabilities reachable from the code; fails on any)
         working-directory: engine
         run: govulncheck ./...
@@ -67,11 +67,11 @@ jobs:
   api:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - run: pip install -r api/requirements.txt pip-audit pip-licenses bandit
+      - run: pip install -r api/requirements.txt pip-audit==2.10.1 pip-licenses==5.5.5 bandit==1.9.4
       - name: pip-audit (known vulnerabilities; fails on any)
         run: pip-audit -r api/requirements.txt
       - name: bandit (static analysis; fails on a finding not reviewed)
@@ -82,7 +82,7 @@ jobs:
   images:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build every image of docker-compose.yml
         run: |
           cp .env.example .env
@@ -101,7 +101,7 @@ jobs:
       - name: trivy (known vulnerabilities in the images; a fixable high or critical one fails our images, is reported for the upstream ones)
         run: |
           scan() { docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME/.cache/trivy:/root/.cache/" \
-            aquasec/trivy:latest image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --no-progress "$@"; }
+            aquasec/trivy:0.76.2 image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --no-progress "$@"; }
           for i in $(docker compose config --images | sort -u); do
             echo "::group::$i"
             case "$i" in

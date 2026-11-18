@@ -1,0 +1,8 @@
+# Line endings: LF in the repository and in every checkout, also on Windows
+# (core.autocrlf=true would turn the shell scripts into CRLF, and a container
+# fails with "exec ...: no such file or directory").
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
