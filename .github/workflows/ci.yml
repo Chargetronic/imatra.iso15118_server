@@ -102,6 +102,13 @@ jobs:
           if grep -q -- '--- SKIP' test.log; then grep -- '--- SKIP' test.log; exit 1; fi
   api:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: test, POSTGRES_DB: imatra_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 2s --health-retries 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -111,6 +118,10 @@ jobs:
       - run: python -m compileall -q api/app && python -c "import json; json.load(open('api/schemas/events.v1.json'))"
       # the published operator contract matches the code (scripts/export-openapi.py)
       - run: python scripts/export-openapi.py --check
+      # keys and rights, audit, commands and activations, the feed (api/tests/test_api.py)
+      - run: pip install pytest==9.2.0 && python -m pytest -q tests
+        working-directory: api
+        env: { POSTGRES_HOST: 127.0.0.1, POSTGRES_DB: imatra_test, POSTGRES_USER: postgres, POSTGRES_PASSWORD: test }
   contracts:
     # the machine-readable contracts in spec/ are valid
     runs-on: ubuntu-24.04
