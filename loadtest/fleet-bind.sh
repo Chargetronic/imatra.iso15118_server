@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright Contributors to the project. See NOTICE.
 
-# Registers and binds the whole fleet in the test layer at once (ids
+# LT_MODE=layer only. Registers and binds the whole fleet in the test layer at once (ids
 # fleet-00001.., as fleetgen names them) and waits until the deployment has
 # applied every registry message: the initial registry load (F4-d).
 #   loadtest/fleet-bind.sh N [OP]     OP: add (default), bind, unbind, revoke
@@ -11,9 +11,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 N=${1:?usage: fleet-bind.sh N [add|bind|unbind|revoke]}
 OP=${2:-add}
-HARNESS_DIR=${HARNESS_DIR:-$PWD/../imatra.test_harness}
-H="docker compose -f $HARNESS_DIR/compose/harness.yml"
-I="docker compose -p imatra-harness-server -f $PWD/docker-compose.yml -f $HARNESS_DIR/compose/imatra.override.yml --project-directory $PWD"
+. loadtest/lib.sh
+need_layer fleet-bind.sh   # PKI_MODE=own needs no registry: devices appear at their first connection
 set -a; . ./.env; set +a
 psql() { $I exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "$1"; }
 want=bound; [ "$OP" = unbind ] && want=unbound; [ "$OP" = revoke ] && want=revoked
