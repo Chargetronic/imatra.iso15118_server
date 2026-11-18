@@ -361,7 +361,9 @@ func activate(ctx context.Context, o *options, m *metrics, devs []*device) *Acti
 			mu.Lock()
 			if err != nil || resp.StatusCode != 202 {
 				rep.APIErrors++
-				if err == nil {
+				if err != nil {
+					log.Printf("activation %s: %v", d.id, err)
+				} else {
 					log.Printf("activation %s: HTTP %d", d.id, resp.StatusCode)
 				}
 			} else {
@@ -509,7 +511,9 @@ func activateGroup(ctx context.Context, o *options, m *metrics, devs []*device) 
 			mu.Lock()
 			if err != nil || resp.StatusCode != 201 {
 				rep.APIErrors++
-				if err == nil {
+				if err != nil {
+					log.Printf("activation: %v", err)
+				} else {
 					log.Printf("activation: HTTP %d", resp.StatusCode)
 				}
 			} else {

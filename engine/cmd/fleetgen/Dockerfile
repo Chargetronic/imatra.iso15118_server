@@ -19,6 +19,9 @@ RUN go mod download \
     && go build -trimpath -ldflags="-s -w" -o /out/fleetgen ./cmd/fleetgen
 
 FROM debian:bookworm-slim
+# the system CA bundle: -api https://<deployment> with a public certificate
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/fleetgen /usr/local/bin/fleetgen
 USER nobody
 WORKDIR /tmp

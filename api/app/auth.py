@@ -10,7 +10,8 @@ Keys live in api_keys as SHA-256. A key found is cached in
 the process for KEY_CACHE_S (30 s), so a revoked key stops working within
 that time; last_used_at is written at most once a minute per key.
 Keys in OPERATOR_API_KEYS (.env, "name:key ...") are taken over at start with
-all rights (a first key for a new installation).
+all rights (a first key for a new installation); a key taken over this way and
+no longer in OPERATOR_API_KEYS is revoked at the next start.
 """
 import hashlib
 import json
@@ -49,13 +50,16 @@ def create(conn, name: str, rights: list[str], source: str = "cli", key: str | N
 
 
 def take_over_env_keys() -> int:
-    """OPERATOR_API_KEYS from .env -> api_keys (all rights), once per key."""
+    """OPERATOR_API_KEYS from .env -> api_keys (all rights), once per key; the
+    keys taken over earlier and no longer listed there are revoked."""
     n = 0
     with db.connect() as conn:
+        listed = []
         for pair in os.environ.get("OPERATOR_API_KEYS", "").split():
             name, _, key = pair.partition(":")
             if not name or len(key) < 16:
                 continue
+            listed.append(_hash(key))
             # Several API processes start at once: whichever inserts first wins.
             r = conn.execute("INSERT INTO api_keys (name, prefix, hash, rights, source) "
                              "VALUES (%s, %s, %s, %s, 'env') ON CONFLICT DO NOTHING",
@@ -64,6 +68,9 @@ def take_over_env_keys() -> int:
                 n += 1
             elif not conn.execute("SELECT 1 FROM api_keys WHERE hash = %s", (_hash(key),)).fetchone():
                 log.warning("OPERATOR_API_KEYS: a key named %s exists already with another value; skipped", name)
+        for (name,) in conn.execute("UPDATE api_keys SET revoked_at = now() WHERE source = 'env' "
+                                    "AND revoked_at IS NULL AND NOT (hash = ANY(%s::bytea[])) RETURNING name", (listed,)):
+            log.warning("operator key %s revoked: no longer in OPERATOR_API_KEYS", name)
     return n
 
 
