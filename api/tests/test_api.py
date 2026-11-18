@@ -7,6 +7,7 @@ commands and activations, the event feed by cursor.
 Needs an empty database the tests may fill (the migrations are applied at the
 start): the API's settings POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER,
 POSTGRES_PASSWORD (and PGPORT if not 5432). Without them the tests are skipped.
+Test dependencies: pip install -r requirements-test.txt
 
     POSTGRES_HOST=localhost POSTGRES_DB=imatra_test POSTGRES_USER=imatra \\
     POSTGRES_PASSWORD=... python -m pytest -q tests      # from api/

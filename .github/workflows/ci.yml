@@ -119,7 +119,7 @@ jobs:
       # the published operator contract matches the code (scripts/export-openapi.py)
       - run: python scripts/export-openapi.py --check
       # keys and rights, audit, commands and activations, the feed (api/tests/test_api.py)
-      - run: pip install pytest==9.2.0 && python -m pytest -q tests
+      - run: pip install -r requirements-test.txt && python -m pytest -q tests
         working-directory: api
         env: { POSTGRES_HOST: 127.0.0.1, POSTGRES_DB: imatra_test, POSTGRES_USER: postgres, POSTGRES_PASSWORD: test }
   contracts:

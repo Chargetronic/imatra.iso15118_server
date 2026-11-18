@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright Contributors to the project. See NOTICE.
 
-fastapi==0.162.7
+fastapi==0.163.0
 uvicorn==0.54.0
 psycopg[binary]==3.3.9
 psycopg-pool==3.3.3
