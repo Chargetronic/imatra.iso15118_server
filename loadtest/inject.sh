@@ -6,10 +6,7 @@
 #   loadtest/inject.sh engine-kill|pg-stop|pg-start|valkey-kill|valkey-flush|relay-stop|relay-start|layer-stop|layer-start
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-HARNESS_DIR=${HARNESS_DIR:-$PWD/../imatra.test_harness}
-P=imatra-harness-server
-I="docker compose -p $P -f $PWD/docker-compose.yml -f $HARNESS_DIR/compose/imatra.override.yml --project-directory $PWD"
-H="docker compose -f $HARNESS_DIR/compose/harness.yml"
+. loadtest/lib.sh
 case "${1:?what}" in
   engine-kill)  docker kill -s KILL $P-engine-1 >/dev/null; m="engine-1 killed (kill -9), Docker restarts it" ;;
   pg-stop)      $I stop postgres >/dev/null 2>&1; m="postgres stopped" ;;
@@ -18,8 +15,8 @@ case "${1:?what}" in
   valkey-flush) docker exec $P-valkey-1 valkey-cli FLUSHALL >/dev/null; m="valkey FLUSHALL" ;;
   relay-stop)   $I stop relay >/dev/null 2>&1; m="relay stopped" ;;
   relay-start)  $I start relay >/dev/null 2>&1; m="relay started" ;;
-  layer-stop)   $H stop layer layer-mqtt >/dev/null 2>&1; m="test layer stopped" ;;
-  layer-start)  $H start layer-mqtt layer >/dev/null 2>&1; m="test layer started" ;;
+  layer-stop)   need_layer layer-stop; $H stop layer layer-mqtt >/dev/null 2>&1; m="test layer stopped" ;;
+  layer-start)  need_layer layer-start; $H start layer-mqtt layer >/dev/null 2>&1; m="test layer started" ;;
   *) echo "unknown: $1" >&2; exit 2 ;;
 esac
 echo "$(date -u +%FT%TZ) $m"

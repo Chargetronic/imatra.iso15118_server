@@ -20,7 +20,8 @@
 #           AOF (15 min), relay stopped for 2 min (19 min)
 #   flush   steady state, Valkey FLUSHALL at 8 min (working state lost: running
 #           sessions end with FAILED_UnknownSession, new ones go on)
-#   layerdown  steady state, the test layer stopped for 5 min at 6 min (F4-g)
+#   smoke   a minute of the kit end to end (use N=20; CI)
+#   layerdown  steady state, the test layer stopped for 5 min at 6 min (F4-g; LT_MODE=layer)
 # Env: N, CONN_RATE (200), SKEW (device clock offset, -30s), LT (~/loadtest),
 #      SERVER: deploy@<private IP> of the deployment when this host is a separate
 #      generator (the collector runs there over ssh; the files of $LT copied from it once),
@@ -33,8 +34,15 @@ CONN_RATE=${CONN_RATE:-200}
 SKEW=${SKEW:--30s}
 LT=${LT:-$HOME/loadtest}
 STAGE_N=${STAGE_N:-2000}
-P=imatra-harness-server
+if [ -n "${SERVER:-}" ] && [ ! -s "$LT/secrets" ]; then   # a separate generator: the files once
+  mkdir -p "$LT" && chmod 700 "$LT"
+  for f in secrets ca.crt root.crt root.key mode; do scp -q "$SERVER:loadtest/$f" "$LT/"; done
+  chmod 600 "$LT"/*
+fi
+. loadtest/lib.sh
+[ "$SC" = layerdown ] && need_layer layerdown
 declare -A FLAGS=(
+  [smoke]="-plug-spread 15s -charge 40s -duration 75s"
   [f0]="-plug-spread 1m -charge 4m -duration 5m"
   [steady]="-plug-spread 5m -charge 18m -duration 24m -activate-at 12m -activate-n $STAGE_N -activate-pool -activate-groups 1"
   [stopwave]="-plug-spread 20s -charge 6m -duration 8m"
@@ -48,11 +56,6 @@ declare -A FLAGS=(
 LABEL=${2:-$(date +%m%d-%H%M)-$SC-$N}
 OUT=$PWD/results/$LABEL
 mkdir -p "$OUT"
-if [ -n "${SERVER:-}" ] && [ ! -s "$LT/secrets" ]; then
-  mkdir -p "$LT" && chmod 700 "$LT"
-  for f in secrets ca.crt root.crt root.key; do scp -q "$SERVER:loadtest/$f" "$LT/"; done
-  chmod 600 "$LT"/*
-fi
 [ -s "$LT/secrets" ] || { echo "run loadtest/server-up.sh first" >&2; exit 1; }
 docker image inspect fleetgen >/dev/null 2>&1 || docker build -q -f engine/cmd/fleetgen/Dockerfile -t fleetgen engine >/dev/null
 
