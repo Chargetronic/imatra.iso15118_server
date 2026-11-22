@@ -20,15 +20,22 @@ device and an electric vehicle, and methods carried out in it.
 
 - Using, changing and distributing Imatra, including running it in
   production, is covered by the Apache License 2.0, without payment.
-- Charging devices, communication adapters, charging stations and other
-  equipment are not part of Imatra. Publishing Imatra grants no licence, under
-  Section 3 or by implication, to develop, make, sell, import or deploy such
-  equipment. Where such equipment, alone or in combination with Imatra, falls
-  under the claims, it needs a licence from Salute Solutions Oy.
-- Equipment from manufacturers licensed by Chargetronic needs no further
-  licence to be used with Imatra.
+- **Charging equipment** is not part of Imatra: any device at a charging
+  point that carries the communication with the vehicle (an adapter, a
+  charging station, a charge controller), whoever makes it; Chargetronic's
+  SmartPlug is one example. Publishing Imatra grants no licence, under
+  Section 3 or by implication, to develop, make, sell, import or deploy
+  charging equipment. Where such equipment, alone or in combination with
+  Imatra, falls under the claims, it needs a licence from Salute Solutions Oy.
+- Charging equipment from manufacturers licensed by Chargetronic needs no
+  further licence to be used with Imatra.
+- **Protocol adapters** are software, not charging equipment: programs that
+  use only the operator API `/v1` and the event feed and take no part in the
+  communication with the vehicle, such as OCPP, OpenADR or market adapters
+  ([adapters/README.md](adapters/README.md)). They need no licence from
+  Salute Solutions Oy.
 
 ## Licensing equipment
 
-Manufacturers who want to build or sell equipment on this architecture:
+Manufacturers who want to build or sell charging equipment on this architecture:
 cto@chargetronic.fi.
