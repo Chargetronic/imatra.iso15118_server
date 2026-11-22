@@ -11,8 +11,9 @@ needs only a PLC modem and a small controller. Operators read what each car
 needs — energy, departure time, state of charge — and shift or limit charging
 through an open API.
 
-**Status: in preparation, not yet released.** No version has been published;
-see [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
+**Status: version 0.1.0, released 18 November 2026**
+([release notes](https://github.com/chargetronic/imatra.iso15118_server/releases/tag/v0.1.0),
+[CHANGELOG.md](CHANGELOG.md), [ROADMAP.md](ROADMAP.md)).
 
 ## How it works
 
