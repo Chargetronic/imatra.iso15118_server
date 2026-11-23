@@ -9,6 +9,24 @@ Changes to a contract (device protocol, registry and rules, database schema,
 
 ## [Unreleased]
 
+### Added
+
+- **ISO 15118-20, AC charging with external identification (EIM)** next to
+  ISO 15118-2 in the same engine (ADR-004): SessionSetup to SessionStop, the
+  Scheduled and the Dynamic control mode (the operator's limit is the target
+  power in Dynamic, a schedule renegotiation in Scheduled), the EV's energy
+  requests and SoC in `ev.parameters`. Offered in the handshake before
+  ISO 15118-2 only when `ISO20_ENABLED=true` and the device's connection to
+  the EV runs TLS 1.3. Off by default. **contract** (setting)
+- **Contract**, device protocol: `Up.pt` / `Down.pt` carry the ISO 15118-20
+  payload types 0x8002 and 0x8003; the Charging Loop pair has the kind
+  `prefix` for ISO 15118-20 (ADR-005: prefix compare and the device's own time
+  stamp in the cached answer). Devices that do not know it send every loop
+  request to the server.
+- **Contract**, events: `v2g.started` protocol `iso15118-20`; `ev.parameters`
+  fields `ev_min_power_w`, `ev_target_energy_wh`, `ev_max_energy_wh`,
+  `ev_min_energy_wh`, `target_soc`, `min_soc`, `control_mode`.
+
 ## [0.1.0] - 2026-11-18
 
 First public release: the server of one deployment for ISO 15118-2 AC

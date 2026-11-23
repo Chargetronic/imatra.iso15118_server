@@ -8,7 +8,7 @@
 package exi
 
 /*
-#cgo LDFLAGS: -lcbv2g_iso2 -lcbv2g_din -lcbv2g_exi_codec
+#cgo LDFLAGS: -lcbv2g_iso20 -lcbv2g_iso2 -lcbv2g_din -lcbv2g_exi_codec
 #include <stdlib.h>
 #include "facade.h"
 */

@@ -87,12 +87,27 @@ type Trace struct {
 // CachePair: the EV's ChargingStatusReq bytes, the response to give for
 // them, and the local termination scenario (StopCharging, PowerDeliveryRes,
 // SessionStopRes). Ver: newer replaces older; TTLS also renews the TTL.
+//
+// ISO 15118-20 (Kind "prefix", ADR-005): the loop request changes every time
+// (time stamp, the EV's values), so the device compares only the first
+// ReqBits bits of Req (message type and session ID) and the payload type PT;
+// before it sends Res or a Term answer it writes the current Unix time as five
+// 7-bit EXI groups (40 bits) at bit ResTS / TermTS[i], and sends Term[i] with
+// payload type TermPT[i]. A device that does not know Kind compares all bytes:
+// it never hits, every loop request goes to the server (no wrong answer).
 type CachePair struct {
 	Ver  int64    `json:"ver"`
 	Req  []byte   `json:"req"`
 	Res  []byte   `json:"res"`
 	Term [][]byte `json:"term,omitempty"`
 	TTLS int      `json:"ttl_s"`
+	// ISO 15118-20 only (Kind "prefix").
+	Kind    string   `json:"kind,omitempty"`
+	PT      uint16   `json:"pt,omitempty"`
+	ReqBits int      `json:"req_bits,omitempty"`
+	ResTS   int      `json:"res_ts_bit,omitempty"`
+	TermPT  []uint16 `json:"term_pt,omitempty"`
+	TermTS  []int    `json:"term_ts_bit,omitempty"`
 	// CommandID: the operator command this answer carries (its limit), echoed
 	// back in the Ack; 0 when the pair follows from the station settings only.
 	CommandID int64 `json:"command_id,omitempty"`

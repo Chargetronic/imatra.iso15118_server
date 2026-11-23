@@ -84,6 +84,7 @@ type engine struct {
 	pres     *presenceWriter     // device presence, batched (presence.go)
 	blocked  *blocklist          // devices blocked by the operator (block.go)
 	reg      registry            // the service layer's device registry (registry.go)
+	iso20    bool                // ISO20_ENABLED: offer ISO 15118-20 AC on TLS 1.3 connections (ADR-004)
 }
 
 func main() {
@@ -154,6 +155,7 @@ func main() {
 		supply:  supplyState{last: map[string]time.Time{}},
 		c:       newCaches(),
 		blocked: &blocklist{set: map[string]struct{}{}},
+		iso20:   env("ISO20_ENABLED", "false") == "true",
 	}
 	if e.st, err = newStateStore(db, log); err != nil {
 		log.Error("state store", "err", err)
@@ -315,7 +317,10 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 	sess, err := e.st.Load(ctx, device, up.Conn)
 	if err == nil && sess == nil {
 		st0 := secc.NewState(time.Now())
-		if up.Event == "" && len(up.EXI) > 0 && secc.Resume(st0, up.EXI) {
+		if up.Event == "open" {
+			st0.TLS = up.TLS // ISO 15118-20 needs TLS 1.3 to the EV (ADR-004)
+		}
+		if up.Event == "" && len(up.EXI) > 0 && secc.ResumePT(st0, ptOf(up), up.EXI) {
 			// A request in the middle of a session the server does not know:
 			// its state was lost (Valkey restart). Answered by the standard
 			// (V2G2-460 / V2G2-756), not by closing without an answer.
@@ -356,11 +361,18 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 		if !e.journal(device) {
 			return
 		}
-		e.addEvent(ctx, device, sess.ID, secc.Event{Type: "loop.alive",
-			Data: map[string]any{"seq": up.Seq, "up_ms": float64(tSrvRx-up.TEVRx) / 1000}})
+		data := map[string]any{"seq": up.Seq, "up_ms": float64(tSrvRx-up.TEVRx) / 1000}
+		if secc.IsISO20(ptOf(up)) {
+			// ISO 15118-20: the sample carries the EV's current report (SoC,
+			// in Dynamic mode its needs); journalled with the liveness sign.
+			if q, err := secc.LoopSample20(ptOf(up), up.EXI); err == nil {
+				data["ev"] = q
+			}
+		}
+		e.addEvent(ctx, device, sess.ID, secc.Event{Type: "loop.alive", Data: data})
 		return
 	}
-	if up.PT != exi.PayloadEXI {
+	if pt := ptOf(up); pt != exi.PayloadEXI && !secc.IsISO20(pt) {
 		log.Warn("unexpected payload type", "pt", fmt.Sprintf("0x%04x", up.PT))
 		return
 	}
@@ -379,7 +391,7 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 		if up.Plug != "" {
 			sess.State.Plug = up.Plug // the plug-in this session runs in (ADR-003)
 		}
-		res, stepErr = secc.Step(sess.State, cfg, e.env, up.EXI)
+		res, stepErr = secc.StepPT(sess.State, cfg, e.env, ptOf(up), up.EXI)
 		if stepErr != nil {
 			break
 		}
@@ -408,7 +420,7 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 		_ = e.st.Save(ctx, sess, events.Event{Type: events.V2GEnded, Device: device, SessionID: sess.ID,
 			Time: at, Plug: sess.State.Plug, Data: map[string]any{"reason": sess.State.EndReason, "failed": true}})
 		e.closeOpen(device, up.Conn)
-		e.publish(device, &tunnel.Down{Conn: up.Conn, Seq: up.Seq, PT: exi.PayloadEXI, Close: true, TSrvRx: tSrvRx})
+		e.publish(device, &tunnel.Down{Conn: up.Conn, Seq: up.Seq, PT: ptOf(up), Close: true, TSrvRx: tSrvRx})
 		_, _ = e.journalMessage(ctx, device, &store.Message{SessionID: sess.ID, Conn: up.Conn, Seq: up.Seq,
 			Direction: "ev_to_server", Source: "device", Type: "undecodable", EXI: up.EXI,
 			Decoded: map[string]string{"error": stepErr.Error()}, Payload: len(up.EXI), Wire: up.WireBytes,
@@ -423,7 +435,7 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 		return
 	}
 	tm.mark("step+save")
-	down := &tunnel.Down{Conn: up.Conn, Seq: up.Seq, PT: exi.PayloadEXI, EXI: res.EXI, Close: res.Close, TSrvRx: tSrvRx, CL: cl}
+	down := &tunnel.Down{Conn: up.Conn, Seq: up.Seq, PT: res.PT, EXI: res.EXI, Close: res.Close, TSrvRx: tSrvRx, CL: cl}
 	e.publish(device, down)
 	tm.mark("publish")
 	tm.warnIfSlow(log, res.RequestType)
@@ -607,9 +619,25 @@ func (e *engine) onTelemetry(_ mqtt.Client, m mqtt.Message) {
 	}
 }
 
+// ptOf: the request's V2GTP payload type; a device before the field sends
+// none, and then only ISO 15118-2 / DIN 70121 (0x8001).
+func ptOf(up tunnel.Up) uint16 {
+	if up.PT == 0 {
+		return exi.PayloadEXI
+	}
+	return up.PT
+}
+
 // stationConfig: limits and identity the responses are built from. Every
 // answer to the EV (from the server or from the cache) must use the same one.
+// The engine's ISO 15118-20 setting goes with it (not stored with the rest).
 func (e *engine) stationConfig(ctx context.Context, device string) secc.Config {
+	cfg := e.stationConfigStored(ctx, device)
+	cfg.ISO20 = e.iso20
+	return cfg
+}
+
+func (e *engine) stationConfigStored(ctx context.Context, device string) secc.Config {
 	vk := e.vk()
 	if vk != nil { // shared hot state (hotstate.go)
 		if cfg, ok := e.hotGet(ctx, vk, device); ok {
@@ -954,17 +982,21 @@ func (e *engine) pair(st *secc.State, cfg secc.Config, force bool) *tunnel.Cache
 	if !e.dev.CacheEnabled {
 		return nil
 	}
-	res, term, err := secc.CachePair(st, cfg)
+	p, err := secc.CachePairOf(st, cfg, time.Now())
 	if err != nil {
 		e.log.Error("cache pair", "err", err)
 		return nil
 	}
-	if res == nil || (!force && hex.EncodeToString(res) == st.CLRes) {
+	if p == nil || (!force && p.Key == st.CLRes) {
 		return nil
 	}
-	st.CLRes = hex.EncodeToString(res)
+	st.CLRes = p.Key // ISO 15118-2: the answer's hex; -20: the same without its time stamp
 	req, _ := hex.DecodeString(st.CLReq)
-	return &tunnel.CachePair{Ver: nowUS(), Req: req, Res: res, Term: term, TTLS: e.dev.TTLS}
+	cl := &tunnel.CachePair{Ver: nowUS(), Req: req, Res: p.Res, Term: p.Term, TTLS: e.dev.TTLS}
+	if p.ReqBits > 0 { // ISO 15118-20 (ADR-005)
+		cl.Kind, cl.PT, cl.ReqBits, cl.ResTS, cl.TermPT, cl.TermTS = "prefix", p.PT, p.ReqBits, p.ResTS, p.TermPT, p.TermTS
+	}
+	return cl
 }
 
 // onStatus: when a device (re)connects, give it its settings and the

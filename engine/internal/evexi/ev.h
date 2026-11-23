@@ -56,6 +56,7 @@ typedef struct {
 
 // supportedAppProtocolReq offering ISO 15118-2 only (SchemaID 1).
 int ev_encode_apphand_req(uint8_t* out, size_t cap, size_t* out_len);
+int ev_encode_apphand_req20(uint8_t* out, size_t cap, size_t* out_len);
 int ev_encode_req(const ev_req* in, uint8_t* out, size_t cap, size_t* out_len);
 int ev_decode_res(const uint8_t* data, size_t len, ev_res* out);
 

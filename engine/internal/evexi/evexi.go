@@ -86,6 +86,17 @@ func EncodeAppHandReq() ([]byte, error) {
 	return buf[:n], nil
 }
 
+// EncodeAppHandReq20: supportedAppProtocolReq offering ISO 15118-20 AC
+// (SchemaID 2, priority 1) and ISO 15118-2 (SchemaID 1, priority 2).
+func EncodeAppHandReq20() ([]byte, error) {
+	buf := make([]byte, maxEXI)
+	var n C.size_t
+	if rc := C.ev_encode_apphand_req20((*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), &n); rc != C.EV_OK {
+		return nil, fmt.Errorf("evexi: apphand encode: %d", int(rc))
+	}
+	return buf[:n], nil
+}
+
 // EncodeReq encodes an ISO 15118-2 request.
 func EncodeReq(r *Req) ([]byte, error) {
 	var in C.ev_req
