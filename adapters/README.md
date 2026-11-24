@@ -13,6 +13,9 @@ to it. They use the published interfaces of the deployment:
 An adapter gets an operator key with the rights it needs (`read`, `control`,
 ...) and is audited like any other caller.
 
+Adapters here are software (protocol adapters), not charging equipment: they
+need no patent licence ([PATENTS.md](../PATENTS.md)).
+
 This server ships no adapters: OpenADR, OCPP and other protocol clients are out
 of its scope. They are built on these interfaces as separate projects; this
 directory only describes how to connect them.
