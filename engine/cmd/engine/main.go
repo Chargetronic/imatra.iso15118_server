@@ -1078,9 +1078,11 @@ func (e *engine) pair(st *secc.State, cfg secc.Config, force bool) *tunnel.Cache
 	st.CLRes = p.Key // ISO 15118-2: the answer's hex; -20: the same without its time stamp
 	req, _ := hex.DecodeString(st.CLReq)
 	cl := &tunnel.CachePair{Ver: nowUS(), Req: req, Res: p.Res, Term: p.Term, TTLS: e.dev.TTLS}
-	if p.ReqBits > 0 { // ISO 15118-20 (ADR-005)
-		cl.Kind, cl.PT, cl.ReqBits, cl.ResTS, cl.TermPT, cl.TermTS = "prefix", p.PT, p.ReqBits, p.ResTS, p.TermPT, p.TermTS
-		cl.TS = p.TS
+	// one algorithm on the device for both versions (ADR-005)
+	cl.PT, cl.ReqBits, cl.TermPT = p.PT, p.ReqBits, p.TermPT
+	if p.TS > 0 { // ISO 15118-20: the device writes the time stamp
+		at := p.ResTS
+		cl.Kind, cl.ResTS, cl.TermTS, cl.TS = "prefix", &at, p.TermTS, p.TS
 	}
 	return cl
 }

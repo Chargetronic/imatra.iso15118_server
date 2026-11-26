@@ -152,6 +152,15 @@ func TestCachePair(t *testing.T) {
 		if hex.EncodeToString(r.EXI) != hex.EncodeToString(pair) {
 			t.Fatalf("#%d engine answer differs from the cached pair", i+1)
 		}
+		// The device's one algorithm (ADR-005): ReqBits is the whole
+		// request, no time stamp to write; it answers with the pair as is.
+		p, err := CachePairOf(st, cfg, env.Now())
+		if err != nil || p == nil || p.ReqBits != len(firstReq)*8 || p.TS != 0 || len(p.TermPT) != 3 {
+			t.Fatalf("pair of ISO 15118-2: %+v %v", p, err)
+		}
+		if !exi.PrefixMatch(firstReq, m, p.ReqBits) || hex.EncodeToString(p.Res) != hex.EncodeToString(r.EXI) {
+			t.Fatalf("#%d the device's prefix compare misses an ISO 15118-2 loop request", i+1)
+		}
 		if i+1 < len(types) && types[i+1] == "ChargingStatusReq" {
 			continue
 		}

@@ -354,8 +354,8 @@ components:
       required: [ver, req, res, ttl_s]
       properties:
         ver: { type: integer, format: int64, description: 'Pair version, monotonic per device' }
-        req: { $ref: '#/components/schemas/Base64', description: 'ChargingStatusReq EXI, compared byte for byte' }
-        res: { $ref: '#/components/schemas/Base64', description: 'ChargingStatusRes EXI to answer with' }
+        req: { $ref: '#/components/schemas/Base64', description: 'The loop request (ChargingStatusReq / AC_ChargeLoopReq) EXI; its first `req_bits` bits are compared' }
+        res: { $ref: '#/components/schemas/Base64', description: 'The loop answer EXI (with the time stamp written in when `res_ts_bit` is set)' }
         term:
           type: array
           description: 'Termination scenario: ChargingStatusRes with StopCharging, then PowerDeliveryRes, SessionStopRes for the next misses.'
@@ -366,11 +366,15 @@ components:
           type: string
           enum: [prefix]
           description: |
-            ISO 15118-20 (ADR-005). Absent: ISO 15118-2, `req` is compared byte
-            for byte and the answers are sent as they are. `prefix`: the
-            AC_ChargeLoopReq changes every time (time stamp, the EV's values),
-            so only the first `req_bits` bits of `req` and the payload type
-            `pt` are compared; before sending `res` (or `term[i]`) the device
+            One algorithm for both protocol versions (ADR-005): a request
+            hits when its payload type is `pt` and its first `req_bits` bits
+            are those of `req` (absent: all of `req`); the device answers with
+            `res`, writing the time stamp first when `res_ts_bit` is set.
+            ISO 15118-2: `req_bits` is the whole request (constant within a
+            session), no time stamp. `kind: prefix` (informational) marks
+            ISO 15118-20: the AC_ChargeLoopReq changes every time (time stamp,
+            the EV's values), so `req_bits` covers only the message type and
+            the session ID; before sending `res` (or `term[i]`) the device
             writes a time stamp into it: microseconds of SECC time (UTC, ISO
             15118-20 V2G20-1534), max(its clock, `ts` + 1, the last one it
             wrote on this connection + 1), so that every time stamp the EV gets
@@ -380,15 +384,15 @@ components:
             first into the stream) at bit `res_ts_bit` (`term_ts_bit[i]`).
             `term[i]` goes with payload type `term_pt[i]`. The device reports
             the last one it wrote in `last_ts` of every `v2g/up`. A device that
-            does not know `kind` compares all bytes, never hits, and sends
-            every loop request to the server.
-        pt: { type: integer, description: 'kind prefix: payload type of the loop request and of res; 32771 (0x8003) = ISO 15118-20 AC' }
-        req_bits: { type: integer, minimum: 1, description: 'kind prefix: leading bits of req compared (message type and session ID)' }
+            compares all bytes behaves the same for ISO 15118-2 and never hits
+            for ISO 15118-20 (every loop request goes to the server).
+        pt: { type: integer, description: 'Payload type of the loop request and of res: 32769 (0x8001) ISO 15118-2, 32771 (0x8003) ISO 15118-20 AC' }
+        req_bits: { type: integer, minimum: 1, description: 'Leading bits of req compared: ISO 15118-2 the whole request, ISO 15118-20 message type and session ID' }
         res_ts_bit: { type: integer, minimum: 0, description: 'kind prefix: bit offset of the time stamp (64 bits) in res' }
         ts: { type: integer, format: int64, description: 'kind prefix: the time stamp res and term were encoded with, microseconds; every time stamp the device writes is higher' }
         term_pt:
           type: array
-          description: 'kind prefix: payload type of each term answer (AC_ChargeLoopRes 0x8003, PowerDeliveryRes and SessionStopRes 0x8002)'
+          description: 'Payload type of each term answer (ISO 15118-2: 0x8001; ISO 15118-20: AC_ChargeLoopRes 0x8003, PowerDeliveryRes and SessionStopRes 0x8002)'
           items: { type: integer }
         term_ts_bit:
           type: array

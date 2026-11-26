@@ -92,24 +92,26 @@ type Trace struct {
 // them, and the local termination scenario (StopCharging, PowerDeliveryRes,
 // SessionStopRes). Ver: newer replaces older; TTLS also renews the TTL.
 //
-// ISO 15118-20 (Kind "prefix", ADR-005): the loop request changes every time
-// (time stamp, the EV's values), so the device compares only the first
-// ReqBits bits of Req (message type and session ID) and the payload type PT;
-// before it sends Res or a Term answer it writes the current Unix time as five
-// 7-bit EXI groups (40 bits) at bit ResTS / TermTS[i], and sends Term[i] with
-// payload type TermPT[i]. A device that does not know Kind compares all bytes:
-// it never hits, every loop request goes to the server (no wrong answer).
+// One algorithm on the device for both protocol versions (ADR-005): compare
+// the first ReqBits bits of Req and the payload type PT; on a hit send Res;
+// when ResTS is set, first write the time stamp there (ISO 15118-20: 64 bits,
+// microseconds, above TS and the last one). Term[i] goes with TermPT[i], its
+// time stamp at TermTS[i] when set. ISO 15118-2: ReqBits is the whole request
+// (it is constant), no time stamp. A device that only compares all bytes gets
+// the same result for ISO 15118-2 and never hits for ISO 15118-20 (every loop
+// request goes to the server: no wrong answer).
 type CachePair struct {
 	Ver  int64    `json:"ver"`
 	Req  []byte   `json:"req"`
 	Res  []byte   `json:"res"`
 	Term [][]byte `json:"term,omitempty"`
 	TTLS int      `json:"ttl_s"`
-	// ISO 15118-20 only (Kind "prefix").
+	// Kind: "prefix" for ISO 15118-20 (informational: the device needs no
+	// branch, it follows ReqBits and ResTS).
 	Kind    string   `json:"kind,omitempty"`
 	PT      uint16   `json:"pt,omitempty"`
 	ReqBits int      `json:"req_bits,omitempty"`
-	ResTS   int      `json:"res_ts_bit,omitempty"`
+	ResTS   *int     `json:"res_ts_bit,omitempty"`
 	TermPT  []uint16 `json:"term_pt,omitempty"`
 	TermTS  []int    `json:"term_ts_bit,omitempty"`
 	// TS: the time stamp (microseconds) the answers were encoded with; the

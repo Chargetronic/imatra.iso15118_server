@@ -63,7 +63,14 @@ power) until the limits change.
    meter.
 8. **Schedule renegotiation** runs on the side stream 0x8101 next to the loop
    (V2G20-1045): its messages have another payload type and always miss.
-9. **Compatibility.** The pair has `kind: prefix` and the new fields. A device
+9. **One algorithm for both protocol versions.** The device does the same
+   for ISO 15118-2: a hit is the payload type `pt` and the first `req_bits`
+   bits of `req`; for ISO 15118-2 the engine sets `req_bits` to the whole
+   request (it is constant, and in ISO 15118-2 the message type follows the
+   header, so a shorter prefix would not tell it) and sends no time stamp
+   offsets, so nothing is written. The firmware has one code path: compare
+   `req_bits` bits, write the time stamp if `res_ts_bit` is set.
+10. **Compatibility.** The pair has `kind: prefix` and the new fields. A device
    that does not know them compares all bytes, never hits and forwards every
    loop request: no wrong answer, only traffic.
 

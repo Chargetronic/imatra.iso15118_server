@@ -592,8 +592,8 @@ func CachePair(st *State, cfg Config) (res []byte, term [][]byte, err error) {
 }
 
 // Pair is the Charging Loop pair the device gets (ADR-005), for either
-// protocol version. ISO 15118-2: ReqBits 0, the whole request is compared,
-// the answers are given as they are. ISO 15118-20: only the first ReqBits bits
+// protocol version. ISO 15118-2: ReqBits is the whole request (constant
+// within a session), the answers are given as they are (TS 0: no time stamp). ISO 15118-20: only the first ReqBits bits
 // of the request are compared, and the device writes the current time at the
 // bit offsets ResTS / TermTS before it sends an answer. Key identifies the
 // answer without its time stamp (a new pair is sent only when it changes).
@@ -624,7 +624,12 @@ func CachePairOf(st *State, cfg Config, now time.Time) (*Pair, error) {
 	if err != nil || res == nil {
 		return nil, err
 	}
-	return &Pair{PT: exi.PayloadEXI, Res: res, Term: term, Key: hex.EncodeToString(res)}, nil
+	termPT := make([]uint16, len(term))
+	for i := range termPT {
+		termPT[i] = exi.PayloadEXI
+	}
+	return &Pair{PT: exi.PayloadEXI, Res: res, Term: term, TermPT: termPT,
+		ReqBits: len(st.CLReq) / 2 * 8, Key: hex.EncodeToString(res)}, nil
 }
 
 func chargingStatusRes(st *State, cfg Config, notification int) ([]byte, error) {

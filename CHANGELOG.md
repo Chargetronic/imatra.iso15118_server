@@ -24,7 +24,9 @@ Changes to a contract (device protocol, registry and rules, database schema,
   payload types 0x8002, 0x8003 and 0x8101; the Charging Loop pair has the kind
   `prefix` for ISO 15118-20 (ADR-005: prefix compare and the device's own
   64-bit time stamp, microseconds, in the cached answer, above the pair's
-  `ts`); `Up.last_ts` reports the device's last one. Devices that do not know it send every loop
+  `ts`); `Up.last_ts` reports the device's last one. One device algorithm for
+  both versions: ISO 15118-2 pairs carry `pt`, `req_bits` (the whole request)
+  and `term_pt` too, without time stamp offsets. Devices that do not know it send every loop
   request to the server.
 - **Contract**, events: `v2g.started` protocol `iso15118-20`; `ev.parameters`
   fields `ev_min_power_w`, `ev_target_energy_wh`, `ev_max_energy_wh`,
