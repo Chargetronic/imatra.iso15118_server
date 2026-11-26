@@ -62,6 +62,17 @@ What the server measures with time, and where it can come from:
    know yet: the event waits for its plug-in (orphan); except when the
    device's open plug-in has an id of another boot (the software restarted
    with the EV plugged in) — that plug-in takes the new id.
+   **Amended 26.11.2026 (issue #15):** an id of the same boot that no
+   plug-in has does not wait: the projector opens its plug-in at the time of
+   that event (`session_summaries.implicit_start`), and the device's plug-in
+   still open ends `superseded`. A `session.started` of that id arriving
+   later joins the summary (its start moves back). Found on a harness
+   station: the id changed 0.9 s into a plug-in without an unplug, the
+   engine took the second `plugged` for a repeat (PLUG_REPEAT_S) and emitted
+   no `session.started`, so the limit and the unplug of the new id stayed
+   orphans. The engine now compares plug-in ids: a `plugged` with another id
+   is a new plug-in even within the window, and its `session.started`
+   carries `supersedes` (the earlier id); no unplug is invented for that one.
 7. **Compatibility:** a device without the ids (device software before 0.3.2) gets
    arrival times and the 5 s window as before; its telemetry is ordered by
    arrival.

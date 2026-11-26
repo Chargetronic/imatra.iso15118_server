@@ -202,9 +202,15 @@ func (r *liveRow) applyLive(e *ev) {
 		}
 	case "session.started":
 		if !r.plugDseq.Valid || r.plugDseq.Int64 < dseq {
+			// the plug-in id changed without an unplug (issue #15): the same
+			// EV, its V2G session and parameters stay
+			_, same := e.Data["supersedes"].(string)
+			same = same && r.plugged.Valid
 			r.plugged, r.plugDseq = micros(t), sql.NullInt64{Int64: dseq, Valid: true}
-			r.mode, r.charging = sql.NullString{String: "pwm", Valid: true}, false
-			r.v2g, r.proto, r.eAmount, r.soc, r.dep = sql.NullString{}, sql.NullString{}, sql.NullFloat64{}, sql.NullInt64{}, sql.NullInt64{}
+			if !same {
+				r.mode, r.charging = sql.NullString{String: "pwm", Valid: true}, false
+				r.v2g, r.proto, r.eAmount, r.soc, r.dep = sql.NullString{}, sql.NullString{}, sql.NullFloat64{}, sql.NullInt64{}, sql.NullInt64{}
+			}
 			r.dirty = true
 		}
 	case "session.ended":

@@ -28,7 +28,7 @@ router = APIRouter(prefix="/v1")
 ATTR_COLS = ("firmware", "connectivity", "attrs")
 SUMMARY_COLS = ("summary_id", "device_id", "started_at", "ended_at", "mode", "v2g_sessions", "has_eamount",
                 "has_soc", "e_amount_wh", "soc_start", "departure_time_s", "charging_s", "limits_applied",
-                "energy_wh", "energy_quality", "duration_s", "end_reason", "data_gap", "updated_at")
+                "energy_wh", "energy_quality", "duration_s", "end_reason", "implicit_start", "data_gap", "updated_at")
 
 
 def _lag(conn, response: Response) -> None:

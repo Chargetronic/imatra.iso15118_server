@@ -9,6 +9,23 @@ Changes to a contract (device protocol, registry and rules, database schema,
 
 ## [Unreleased]
 
+### Fixed
+
+- Session summaries: a limit applied after the device's plug-in id changed
+  without an unplug was not counted (`limits_applied` 0), and the earlier
+  plug-in ended "no unplug seen" only when the next one started
+  ([#15](https://github.com/Chargetronic/imatra.iso15118_server/issues/15)).
+  - Engine: a `plugged` with another plug-in id within `PLUG_REPEAT_S` is a
+    new plug-in, not a repeat; its `session.started` carries `supersedes`
+    (**contract**: event data, `api/schemas/events.v1.json`).
+  - Projector: an event of a plug-in id without a summary opens it
+    implicitly at the time of that event, the device's open plug-in ends
+    `superseded`; a late `session.started` of the id joins the summary and
+    takes the events waiting for it. A V2G session is not closed by an id
+    change, only by the unplug.
+  - Database: `session_summaries.implicit_start`, migration
+    `003_implicit_plug_in.sql`; `/v1/sessions` returns it (**contract**).
+
 ## [0.1.0] - 2026-11-18
 
 First public release: the server of one deployment for ISO 15118-2 AC

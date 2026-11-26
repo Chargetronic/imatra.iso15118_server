@@ -204,6 +204,10 @@
       "properties": {
        "cp": {
         "type": "string"
+       },
+       "supersedes": {
+        "type": "string",
+        "description": "plug-in id of the device's earlier plug-in that had no unplug: the device counted a new plug-in (its id changed) without reporting one; the earlier plug-in ends 'superseded'"
        }
       },
       "required": [],
