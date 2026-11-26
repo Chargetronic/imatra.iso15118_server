@@ -27,7 +27,7 @@ func Open(dsn string) (*Store, error) { return open(dsn, 0) }
 
 // SchemaNeeded: the newest migration (api/migrations, applied by the
 // API at its start) this code relies on.
-const SchemaNeeded = "002_history_retention.sql"
+const SchemaNeeded = "003_implicit_plug_in.sql"
 
 // WaitSchema blocks until the API has applied the migrations this code needs.
 // The engines, the relay and the projector start together with the API (a

@@ -476,6 +476,11 @@ func (p *projector) apply(ctx context.Context, tx *sql.Tx, e *ev) error {
 		if err != nil {
 			return err
 		}
+		if id == "" && plug != "" && !e.replay {
+			if id, err = p.implicitStart(ctx, tx, e, plug); err != nil {
+				return err
+			}
+		}
 		if id == "" {
 			if plugScoped[e.Type] && !e.replay {
 				return orphan(ctx, tx, e, plug)
@@ -523,15 +528,38 @@ func (p *projector) apply(ctx context.Context, tx *sql.Tx, e *ev) error {
 	case "power.changed":
 		return nil
 	case "session.started":
-		// EV plugged in already in C (basic charging at once): charging from the start
-		if err := ex(`INSERT INTO session_summaries (summary_id, device_id, start_dseq, started_at, charging_since, plug_id)
-			VALUES ($1, $2, $3, $4::timestamptz, CASE WHEN $5 = 'C' THEN $4::timestamptz END, NULLIF($6, ''))
-			ON CONFLICT (summary_id) DO NOTHING`, e.ID, dev, dseq, t, str(e.Data, "cp"), plug); err != nil {
-			return err
+		// The plug-in opened already by an event of its id (implicitStart,
+		// issue #15): this start joins it, the start moves back.
+		sid := e.ID
+		if plug != "" {
+			err := tx.QueryRowContext(ctx, `UPDATE session_summaries SET started_at = LEAST(started_at, $3::timestamptz),
+				  start_dseq = LEAST(start_dseq, $4), implicit_start = false,
+				  charging_since = CASE WHEN $5 = 'C' AND (charging_since IS NULL OR charging_since > $3::timestamptz) AND ended_at IS NULL
+				    THEN $3::timestamptz ELSE charging_since END, updated_at = now()
+				WHERE device_id = $1 AND plug_id = $2 RETURNING summary_id`, dev, plug, t, dseq, str(e.Data, "cp")).Scan(&sid)
+			if err == sql.ErrNoRows {
+				sid = e.ID
+			} else if err != nil {
+				return err
+			}
 		}
-		// an older plug-in that never got its end: closed by this one
-		if err := ex(`UPDATE session_summaries SET ended_at = COALESCE(ended_at, $3), end_reason = COALESCE(end_reason, 'no unplug seen'),
-			  updated_at = now() WHERE device_id = $1 AND started_at < $3 AND ended_at IS NULL AND summary_id <> $2`, dev, e.ID, t); err != nil {
+		if sid == e.ID {
+			// EV plugged in already in C (basic charging at once): charging from the start
+			if err := ex(`INSERT INTO session_summaries (summary_id, device_id, start_dseq, started_at, charging_since, plug_id)
+				VALUES ($1, $2, $3, $4::timestamptz, CASE WHEN $5 = 'C' THEN $4::timestamptz END, NULLIF($6, ''))
+				ON CONFLICT (summary_id) DO NOTHING`, e.ID, dev, dseq, t, str(e.Data, "cp"), plug); err != nil {
+				return err
+			}
+		}
+		// an older plug-in that never got its end: closed by this one;
+		// "superseded" when the device said so (its id changed without an
+		// unplug, issue #15)
+		why := "no unplug seen"
+		if str(e.Data, "supersedes") != nil {
+			why = "superseded"
+		}
+		if err := ex(`UPDATE session_summaries SET ended_at = COALESCE(ended_at, $3), end_reason = COALESCE(end_reason, $4),
+			  updated_at = now() WHERE device_id = $1 AND started_at < $3 AND ended_at IS NULL AND summary_id <> $2`, dev, sid, t, why); err != nil {
 			return err
 		}
 		return p.adopt(ctx, tx, dev, plug, t, e.live)
@@ -562,6 +590,11 @@ func (p *projector) apply(ctx context.Context, tx *sql.Tx, e *ev) error {
 			id, err := p.plugIn(ctx, tx, dev, plug, t)
 			if err != nil {
 				return err
+			}
+			if id == "" && !e.replay { // its session.started not seen: opened now (issue #15)
+				if id, err = p.implicitStart(ctx, tx, e, plug); err != nil {
+					return err
+				}
 			}
 			if id == "" { // the unplug handled before its plug-in: waits for it
 				if !e.replay {
@@ -613,6 +646,33 @@ func (p *projector) apply(ctx context.Context, tx *sql.Tx, e *ev) error {
 		return summary(`limits_applied = limits_applied + 1`)
 	}
 	return nil
+}
+
+// implicitStart (issue #15): an event of a plug-in id that no summary has and
+// no open plug-in takes (plugIn) opens that plug-in at the time of the event,
+// marked implicit_start. Its session.started was never emitted (the engine of
+// v0.1.0 took a "plugged" with a new id for a repeat) or comes later
+// (it joins the summary then). A device has one EV connector: the plug-in
+// still open that started before ends here, "superseded"; one that started
+// after (this event was handled late) ends this one at its start. Events
+// waiting for this id are applied to it.
+func (p *projector) implicitStart(ctx context.Context, tx *sql.Tx, e *ev, plug string) (string, error) {
+	dev, t := e.Device.String, e.Time
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_summaries (summary_id, device_id, start_dseq, started_at, plug_id, implicit_start)
+		VALUES ($1, $2, $3, $4, $5, true) ON CONFLICT (summary_id) DO NOTHING`, e.ID, dev, e.DSeq.Int64, t, plug); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE session_summaries SET ended_at = $3, end_reason = 'superseded', updated_at = now()
+		WHERE device_id = $1 AND summary_id <> $2 AND ended_at IS NULL AND started_at <= $3`, dev, e.ID, t); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE session_summaries s SET ended_at = n.next, end_reason = 'superseded', updated_at = now()
+		FROM (SELECT min(started_at) AS next FROM session_summaries WHERE device_id = $1 AND summary_id <> $2 AND started_at > $3) n
+		WHERE s.summary_id = $2 AND s.ended_at IS NULL AND n.next IS NOT NULL`, dev, e.ID, t); err != nil {
+		return "", err
+	}
+	p.log.Warn("plug-in opened without its session.started", "device", dev, "plug", plug, "seq", e.Seq, "type", e.Type)
+	return e.ID, p.adopt(ctx, tx, dev, plug, t, e.live)
 }
 
 // adopt: events of the device that came before their plug-in existed now
@@ -769,6 +829,9 @@ func (p *projector) digital(ctx context.Context, tx *sql.Tx, e *ev) error {
 	}
 	switch e.Type {
 	case "session.started":
+		if str(e.Data, "supersedes") != nil {
+			return nil // the plug-in id changed, the EV was not unplugged: its V2G session goes on (issue #15)
+		}
 		// not a session of this plug-in whose first request came before
 		// the CP report (ADR-001: within the slack)
 		return closeOpen("no end seen", t.Add(-plugSlack))

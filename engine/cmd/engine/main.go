@@ -523,8 +523,16 @@ func (e *engine) onCP(_ mqtt.Client, m mqtt.Message) {
 			e.confirm(ctx, device, sid, cfg.CommandID, "cp_report", "applied", at, st.Plug)
 		}
 	}
-	if st.Event == "plugged" && e.plugRepeated(ctx, device) {
-		st.Event = "" // the same plug-in reported again (see plugRepeated)
+	supersedes := ""
+	if st.Event == "plugged" {
+		repeat, prev := e.plugRepeated(ctx, device, st.Plug)
+		if repeat {
+			st.Event = "" // the same plug-in reported again (see plugRepeated)
+		} else if prev != "" {
+			// another plug-in id without an unplug between (issue #15)
+			supersedes = prev
+			e.log.Warn("plug-in id changed without an unplug: a new plug-in", "device", device, "plug", st.Plug, "supersedes", prev)
+		}
 	}
 	if st.Event == "unplugged" {
 		e.plugForget(ctx, device)
@@ -556,8 +564,11 @@ func (e *engine) onCP(_ mqtt.Client, m mqtt.Message) {
 		}
 		e.addEvent(ctx, device, sid, secc.Event{Type: "ev." + st.Event, Data: ed})
 		if st.Event == "plugged" {
-			e.emit(ctx, events.Event{Type: events.SessionStarted, Device: device, Time: at, Plug: st.Plug,
-				Data: map[string]any{"cp": st.EV}})
+			d := map[string]any{"cp": st.EV}
+			if supersedes != "" {
+				d["supersedes"] = supersedes
+			}
+			e.emit(ctx, events.Event{Type: events.SessionStarted, Device: device, Time: at, Plug: st.Plug, Data: d})
 			go e.hsLocation(device) // the activation pool's record gets the location
 		} else {
 			d := map[string]any{"reason": "ev_unplugged"}
