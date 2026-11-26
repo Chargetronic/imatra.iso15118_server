@@ -370,6 +370,10 @@ int sp20_encode_res(const sp20_res* in, uint8_t* out, size_t cap, size_t* out_le
             HDR_SET(&r->Header, in);
             r->ResponseCode = rc;
             r->EVSEProcessing = (iso20_processingType)in->evse_processing;
+            if (in->go_to_pause) {
+                r->GoToPause_isUsed = 1;
+                r->GoToPause = 1;
+            }
             if (in->se_mode == SP20_MODE_SCHEDULED) {
                 r->Scheduled_SEResControlMode_isUsed = 1;
                 struct iso20_ScheduleTupleType* t = &r->Scheduled_SEResControlMode.ScheduleTuple.array[0];
@@ -430,6 +434,14 @@ int sp20_encode_res(const sp20_res* in, uint8_t* out, size_t cap, size_t* out_le
                 r->EVSEStatus_isUsed = 1;
                 r->EVSEStatus.NotificationMaxDelay = in->notification_max_delay;
                 r->EVSEStatus.EVSENotification = (iso20_ac_evseNotificationType)in->evse_notification;
+            }
+            if (in->has_meter_info) {
+                r->MeterInfo_isUsed = 1;
+                size_t l = strnlen(in->meter_id, sizeof(in->meter_id));
+                if (l > iso20_ac_MeterID_CHARACTER_SIZE - 1) l = iso20_ac_MeterID_CHARACTER_SIZE - 1;
+                memcpy(r->MeterInfo.MeterID.characters, in->meter_id, l);
+                r->MeterInfo.MeterID.charactersLen = (uint16_t)l;
+                r->MeterInfo.ChargedEnergyReadingWh = in->charged_energy_wh;
             }
             if (in->cl_mode == SP20_MODE_DYNAMIC) {
                 r->Dynamic_AC_CLResControlMode_isUsed = 1;
@@ -662,6 +674,7 @@ int sp20_decode_res(int pt, const uint8_t* data, size_t len, sp20_res* o) {
             HDR_GET(&r->Header, o);
             o->response_code = r->ResponseCode;
             o->evse_processing = r->EVSEProcessing;
+            o->go_to_pause = r->GoToPause_isUsed && r->GoToPause;
             if (r->Scheduled_SEResControlMode_isUsed && r->Scheduled_SEResControlMode.ScheduleTuple.arrayLen > 0) {
                 const struct iso20_ScheduleTupleType* t = &r->Scheduled_SEResControlMode.ScheduleTuple.array[0];
                 o->se_mode = SP20_MODE_SCHEDULED;
@@ -713,6 +726,11 @@ int sp20_decode_res(int pt, const uint8_t* data, size_t len, sp20_res* o) {
         o->has_evse_status = r->EVSEStatus_isUsed;
         o->notification_max_delay = r->EVSEStatus.NotificationMaxDelay;
         o->evse_notification = r->EVSEStatus.EVSENotification;
+        if (r->MeterInfo_isUsed) {
+            o->has_meter_info = 1;
+            str_get(o->meter_id, sizeof(o->meter_id), r->MeterInfo.MeterID.characters, r->MeterInfo.MeterID.charactersLen);
+            o->charged_energy_wh = r->MeterInfo.ChargedEnergyReadingWh;
+        }
         if (r->Dynamic_AC_CLResControlMode_isUsed) {
             o->cl_mode = SP20_MODE_DYNAMIC;
             o->has_target_power = 1;
@@ -766,13 +784,14 @@ int sp20_ts_bit(int pt, const uint8_t* data, size_t len, int verify_full, int* b
     if (!ts) return SP_ERR_UNSUPPORTED;
     uint64_t own = *ts;
 
-    // 2^28 and 2^35-1: both five 7-bit groups; every value bit differs but
-    // the lowest one of the last group, the continuation bits are the same.
+    // 2^49 and 2^56-1: both eight 7-bit groups (microseconds, V2G20-1534);
+    // every value bit differs but the lowest one of the last group, the
+    // continuation bits are the same.
     static _Thread_local uint8_t a[SP20_MAX_EXI], b[SP20_MAX_EXI], c[SP20_MAX_EXI];
     size_t la, lb, lc;
-    *ts = (uint64_t)1 << 28;
+    *ts = (uint64_t)1 << 49;
     if (encode_doc(pt, a, sizeof(a), &la) != SP_OK) return SP_ERR_ENCODE;
-    *ts = ((uint64_t)1 << 35) - 1;
+    *ts = ((uint64_t)1 << 56) - 1;
     if (encode_doc(pt, b, sizeof(b), &lb) != SP_OK) return SP_ERR_ENCODE;
     if (la != lb) return SP_ERR_ENCODE;
     int first = -1;
@@ -784,9 +803,9 @@ int sp20_ts_bit(int pt, const uint8_t* data, size_t len, int verify_full, int* b
     }
     if (first < 1) return SP_ERR_ENCODE;
     int p = first - 1;  // the first group's continuation bit
-    // nothing outside [p, p+40) may differ
+    // nothing outside [p, p+SP20_TS_BITS) may differ
     for (int i = 0; i < (int)la * 8; i++) {
-        if ((i < p || i >= p + 40) && bit_at(a, i) != bit_at(b, i)) return SP_ERR_ENCODE;
+        if ((i < p || i >= p + SP20_TS_BITS) && bit_at(a, i) != bit_at(b, i)) return SP_ERR_ENCODE;
     }
     // the input's prefix before the time stamp is the re-encoding's
     if ((size_t)(p + 7) / 8 > len) return SP_ERR_DECODE;

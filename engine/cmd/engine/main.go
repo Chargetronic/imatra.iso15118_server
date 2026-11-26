@@ -358,6 +358,13 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 	if up.Sampled {
 		// Answered from the cache already: only a liveness sign of the loop
 		// (journal only: at scale the TTL and the heartbeat carry liveness).
+		// ISO 15118-20: an EV that asks for MeterInfo from now on gets it in
+		// the cached answer too (V2G20-1082).
+		if secc.IsISO20(ptOf(up)) && !sess.State.MeterRequested {
+			if q, err := secc.LoopSample20(ptOf(up), up.EXI); err == nil && q.MeterInfoRequested {
+				e.meterPair(ctx, device, true)
+			}
+		}
 		if !e.journal(device) {
 			return
 		}
@@ -390,6 +397,9 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 	for attempt := 0; ; attempt++ {
 		if up.Plug != "" {
 			sess.State.Plug = up.Plug // the plug-in this session runs in (ADR-003)
+		}
+		if up.LastTS > sess.State.LastTS {
+			sess.State.LastTS = up.LastTS // the device's cached answers (V2G20-1537)
 		}
 		res, stepErr = secc.StepPT(sess.State, cfg, e.env, ptOf(up), up.EXI)
 		if stepErr != nil {
@@ -435,6 +445,9 @@ func (e *engine) onUp(_ mqtt.Client, m mqtt.Message) {
 		return
 	}
 	tm.mark("step+save")
+	if sess.State.MeterRequested && sess.State.Protocol == exi.NamespaceISO20AC {
+		e.markMeter(ctx, device)
+	}
 	down := &tunnel.Down{Conn: up.Conn, Seq: up.Seq, PT: res.PT, EXI: res.EXI, Close: res.Close, TSrvRx: tSrvRx, CL: cl}
 	e.publish(device, down)
 	tm.mark("publish")
@@ -617,6 +630,78 @@ func (e *engine) onTelemetry(_ mqtt.Client, m mqtt.Message) {
 	if _, err := e.st.Power(ctx, device, sid, ord, recvAt(m), t.Plug, t.PTotal, t.EWh); err != nil {
 		e.log.Warn("power event", "device", device, "err", err)
 	}
+	e.meterPair(ctx, device, false) // ISO 15118-20 MeterInfo: the new energy into the pair
+}
+
+// meterPair refreshes the MeterInfo of a running ISO 15118-20 session whose
+// EV asked for it (V2G20-1082): the energy of the digital session from the
+// device's readings goes into the device's pair (a push when the whole Wh
+// changed). request: the EV has just asked for it (a cached loop sample).
+func (e *engine) meterPair(ctx context.Context, device string, request bool) {
+	vk := e.vk()
+	if vk == nil {
+		return
+	}
+	if !request {
+		// most telemetry: no -20 session with MeterInfo on this device
+		if n, err := vk.Exists(ctx, meterKey(device)).Result(); err != nil || n == 0 {
+			return
+		}
+	}
+	open, err := e.st.Open(ctx, device)
+	if err != nil || len(open) == 0 {
+		return
+	}
+	o := open[0]
+	if o.State.Protocol != exi.NamespaceISO20AC || (!o.State.MeterRequested && !request) {
+		return
+	}
+	o.State.MeterRequested = true
+	e.markMeter(ctx, device)
+	if wh, ok := e.digitalEnergyWh(ctx, device); ok {
+		o.State.MeterWh = wh
+	}
+	cfg := e.stationConfig(ctx, device)
+	cl := e.tag(cfg, e.pair(o.State, cfg, false))
+	if cl == nil && !request {
+		return // the same answer: nothing to send
+	}
+	if err := e.st.Save(ctx, &o.Session); err != nil {
+		return // a conflict: a step of the session saved meanwhile, the next reading retries
+	}
+	if cl != nil {
+		b, _ := json.Marshal(tunnel.Push{V: tunnel.Version, Conn: o.Conn, CL: cl})
+		e.client.Publish(tunnel.PushTopic(device), 1, false, b)
+	}
+}
+
+// meterKey marks a device whose running -20 session wants MeterInfo, so that
+// telemetry looks at its session only then.
+func meterKey(device string) string { return "m20:" + device }
+
+func (e *engine) markMeter(ctx context.Context, device string) {
+	if vk := e.vk(); vk != nil {
+		vk.Set(ctx, meterKey(device), 1, 48*time.Hour)
+	}
+}
+
+// digitalEnergyWh: the energy since the digital session started, from the
+// plug-in record (pool.go: eplug, e2g).
+func (e *engine) digitalEnergyWh(ctx context.Context, device string) (float64, bool) {
+	vk := e.vk()
+	if vk == nil {
+		return 0, false
+	}
+	r, err := vk.HMGet(ctx, "hs:"+device, "eplug", "e2g").Result()
+	if err != nil || r[0] == nil {
+		return 0, false
+	}
+	ep, _ := strconv.ParseFloat(fmt.Sprint(r[0]), 64)
+	e2g := 0.0
+	if r[1] != nil {
+		e2g, _ = strconv.ParseFloat(fmt.Sprint(r[1]), 64)
+	}
+	return math.Max(0, ep-e2g), true
 }
 
 // ptOf: the request's V2GTP payload type; a device before the field sends
@@ -995,6 +1080,7 @@ func (e *engine) pair(st *secc.State, cfg secc.Config, force bool) *tunnel.Cache
 	cl := &tunnel.CachePair{Ver: nowUS(), Req: req, Res: p.Res, Term: p.Term, TTLS: e.dev.TTLS}
 	if p.ReqBits > 0 { // ISO 15118-20 (ADR-005)
 		cl.Kind, cl.PT, cl.ReqBits, cl.ResTS, cl.TermPT, cl.TermTS = "prefix", p.PT, p.ReqBits, p.ResTS, p.TermPT, p.TermTS
+		cl.TS = p.TS
 	}
 	return cl
 }

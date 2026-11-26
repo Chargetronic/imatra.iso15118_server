@@ -76,6 +76,11 @@ const (
 // Energy transfer service IDs (ISO 15118-20 Table 204); this edition offers AC only.
 const ServiceAC = 1
 
+// PayloadISO20Reneg: the multiplexed side stream of schedule renegotiation
+// (V2G20-1045): AC_ChargeParameterDiscovery (AC schema), ScheduleExchange and
+// PowerDelivery (CommonMessages) next to the running AC_ChargeLoop.
+const PayloadISO20Reneg = 0x8101
+
 // ChargeProgress (PowerDeliveryReq).
 const (
 	Progress20Start                 = 0
@@ -337,6 +342,17 @@ type Response20 struct {
 	EVSEMinPower         *Rat `json:"evse_min_charge_power,omitempty"`
 	EVSENominalFrequency *Rat `json:"evse_nominal_frequency,omitempty"`
 	TargetPower          *Rat `json:"evse_target_active_power,omitempty"`
+
+	// ScheduleExchangeRes: no power available (V2G20-2121)
+	GoToPause bool `json:"go_to_pause,omitempty"`
+	// AC_ChargeLoopRes: when the EV asked for it (V2G20-1082)
+	Meter *MeterInfo20 `json:"meter_info,omitempty"`
+}
+
+// MeterInfo20: the energy charged during the current service session (V2G20-902).
+type MeterInfo20 struct {
+	MeterID   string `json:"meter_id"`
+	ChargedWh uint64 `json:"charged_energy_wh"`
 }
 
 func fillRes20(s *Response20, in *C.sp20_res) {
@@ -398,6 +414,18 @@ func fillRes20(s *Response20, in *C.sp20_res) {
 		in.has_target_power = 1
 		in.target_power = ratTo(*s.TargetPower)
 	}
+	if s.GoToPause {
+		in.go_to_pause = 1
+	}
+	if s.Meter != nil {
+		in.has_meter_info = 1
+		id := s.Meter.MeterID
+		if len(id) > 32 {
+			id = id[:32]
+		}
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(&in.meter_id[0])), 33), id)
+		in.charged_energy_wh = C.uint64_t(s.Meter.ChargedWh)
+	}
 }
 
 // EncodeISO20Res encodes the response; the second value is its payload type.
@@ -438,27 +466,36 @@ func TimeStampBit(pt uint16, data []byte, full bool) (int, error) {
 	return int(bit), nil
 }
 
-// TimeStampBits is the length of the time stamp field the device writes: an
-// EXI unsigned integer of five 7-bit groups, which holds every Unix time from
-// 2^28 (1978) to 2^35-1 (year 3058).
-const TimeStampBits = 40
+// TimeStampBits is the length of the time stamp field the device writes. The
+// header's TimeStamp is microseconds of SECC time (V2G20-1534): an EXI
+// unsigned integer of eight 7-bit groups holds every value from 2^49 (1987) to
+// 2^56-1 (year 4253).
+const TimeStampBits = 64
+
+const tsGroups = TimeStampBits / 8
+
+// TimeStampMin, TimeStampMax: the values the field holds.
+const (
+	TimeStampMin = uint64(1) << 49
+	TimeStampMax = uint64(1)<<56 - 1
+)
 
 // WriteTimeStamp is the device's algorithm, here as the reference: write t
-// (Unix seconds) as an EXI unsigned integer of five 7-bit groups, least
+// (microseconds) as an EXI unsigned integer of eight 7-bit groups, least
 // significant group first, each octet with its continuation bit (1, the last
 // 0), MSB first into the bit stream at bit offset at. The message keeps its
-// length. Errors: t outside [2^28, 2^35) or the field past the end.
+// length. Errors: t outside [2^49, 2^56) or the field past the end.
 func WriteTimeStamp(msg []byte, at int, t uint64) error {
-	if t < 1<<28 || t >= 1<<35 {
-		return fmt.Errorf("exi: time stamp %d needs other than five groups", t)
+	if t < TimeStampMin || t > TimeStampMax {
+		return fmt.Errorf("exi: time stamp %d needs other than %d groups", t, tsGroups)
 	}
 	if at < 0 || at+TimeStampBits > len(msg)*8 {
 		return fmt.Errorf("exi: time stamp field at bit %d outside %d bytes", at, len(msg))
 	}
 	bit := at
-	for g := 0; g < 5; g++ {
+	for g := 0; g < tsGroups; g++ {
 		octet := byte(t>>(7*uint(g))) & 0x7f
-		if g < 4 {
+		if g < tsGroups-1 {
 			octet |= 0x80
 		}
 		for i := 7; i >= 0; i-- {
@@ -472,6 +509,24 @@ func WriteTimeStamp(msg []byte, at int, t uint64) error {
 		}
 	}
 	return nil
+}
+
+// ReadTimeStamp reads the field WriteTimeStamp writes (tests, the device's
+// "last time stamp").
+func ReadTimeStamp(msg []byte, at int) (uint64, error) {
+	if at < 0 || at+TimeStampBits > len(msg)*8 {
+		return 0, fmt.Errorf("exi: time stamp field at bit %d outside %d bytes", at, len(msg))
+	}
+	var t uint64
+	for g := 0; g < tsGroups; g++ {
+		var octet byte
+		for i := 0; i < 8; i++ {
+			b := at + 8*g + i
+			octet = octet<<1 | (msg[b>>3]>>(7-uint(b&7)))&1
+		}
+		t |= uint64(octet&0x7f) << (7 * uint(g))
+	}
+	return t, nil
 }
 
 // PrefixMatch is the device's comparison, as the reference: the first bits of

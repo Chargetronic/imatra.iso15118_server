@@ -147,8 +147,9 @@ typedef struct {
     int n_sets;
     sp20_param_set sets[4];
 
-    // ScheduleExchangeRes
+    // ScheduleExchangeRes (time_anchor: microseconds, SECC time, V2G20-1861)
     int se_mode;  // SP20_MODE_SCHEDULED or SP20_MODE_DYNAMIC
+    int go_to_pause;  // no power available: TRUE, first entry 0 W (V2G20-2121)
     uint32_t schedule_tuple_id;
     uint64_t time_anchor;
     int n_entries;
@@ -162,7 +163,10 @@ typedef struct {
     // AC_ChargeParameterDiscoveryRes
     sp_rat evse_max_power, evse_min_power, evse_nominal_frequency;
 
-    // AC_ChargeLoopRes
+    // AC_ChargeLoopRes: MeterInfo when the EV asked for it (V2G20-1082)
+    int has_meter_info;
+    char meter_id[33];
+    uint64_t charged_energy_wh;
     int cl_mode;  // SP20_MODE_SCHEDULED or SP20_MODE_DYNAMIC
     int has_target_power;  // mandatory in Dynamic, optional in Scheduled
     sp_rat target_power;   // W
@@ -176,6 +180,10 @@ int sp20_encode_res(const sp20_res* in, uint8_t* out, size_t cap, size_t* out_le
 // EV side (tests, the fleet generator): encode a request, decode a response.
 int sp20_encode_req(const sp20_req* in, uint8_t* out, size_t cap, size_t* out_len, int* pt_out);
 int sp20_decode_res(int pt, const uint8_t* data, size_t len, sp20_res* out);
+
+// Width of the header's TimeStamp field the device writes: microseconds of SECC
+// time (V2G20-1534) are eight 7-bit groups from 2^49 (1987) to 2^56 - 1 (4253).
+#define SP20_TS_BITS 64
 
 // Bit offset of the header's TimeStamp in an encoded ISO 15118-20 message (any
 // message of the two schemas, request or response): the message is decoded and

@@ -122,6 +122,21 @@ type State struct {
 	CLReqBits   int     `json:"cl_req_bits,omitempty"`
 	ControlMode int     `json:"control_mode,omitempty"`
 	SchedPowerW float64 `json:"sched_power_w,omitempty"`
+	// LastTS: the highest header TimeStamp (microseconds of SECC time) given
+	// to the EV in this session, by the server or, as the device reports it,
+	// from the cache: every next one is higher (V2G20-1537).
+	LastTS uint64 `json:"last_ts_us,omitempty"`
+	// Reneg: the schedule renegotiation on the side stream (0x8101) in
+	// progress: "" none, "schedule" (after AC_ChargeParameterDiscovery),
+	// "delivery" (after ScheduleExchange). RenegPowerW: the power of the
+	// schedule offered in it, in force after its PowerDelivery.
+	Reneg       string  `json:"reneg,omitempty"`
+	RenegPowerW float64 `json:"reneg_power_w,omitempty"`
+	// MeterRequested: the EV set MeterInfoRequested; every loop answer then
+	// carries MeterInfo (V2G20-1082) with MeterWh, the energy of this
+	// digital session from the device's readings (updated by the engine).
+	MeterRequested bool    `json:"meter_requested,omitempty"`
+	MeterWh        float64 `json:"meter_wh,omitempty"`
 }
 
 func NewState(now time.Time) *State {
@@ -145,7 +160,7 @@ func Resume(st *State, payload []byte) bool { return ResumePT(st, exi.PayloadEXI
 // or FAILED_UnknownSession).
 func ResumePT(st *State, pt uint16, payload []byte) bool {
 	if IsISO20(pt) {
-		if _, err := exi.DecodeISO20(pt, payload); err == nil {
+		if _, err := decode20(pt, "", false, payload); err == nil {
 			st.Protocol, st.Phase = exi.NamespaceISO20AC, PhaseSessionSetup
 			return true
 		}
@@ -583,6 +598,9 @@ func CachePair(st *State, cfg Config) (res []byte, term [][]byte, err error) {
 // bit offsets ResTS / TermTS before it sends an answer. Key identifies the
 // answer without its time stamp (a new pair is sent only when it changes).
 type Pair struct {
+	// TS (ISO 15118-20): the time stamp of the pair's answers; the device
+	// writes a higher one each time it answers (V2G20-1537).
+	TS      uint64
 	PT      uint16
 	Res     []byte
 	ResTS   int

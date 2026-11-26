@@ -11,11 +11,14 @@ package secc
 //	ScheduleExchange -> PowerDelivery(Start) -> AC_ChargeLoop ... ->
 //	PowerDelivery(Stop) -> SessionStop
 //
-// SessionStop is accepted from AuthorizationSetup on. Out of this edition:
-// Plug & Charge (CertificateInstallation, PnC authorization), BPT (V2G), DC,
-// value-added services, service renegotiation, MeteringConfirmation.
-// Open against the text of the standard (ADR-004): resuming a paused session
-// on a new connection (OK_OldSessionJoined), MeterInfo on MeterInfoRequested.
+// SessionStop is accepted from AuthorizationSetup on. Schedule renegotiation
+// runs on the multiplexed side stream 0x8101 next to the loop (V2G20-1045 to
+// -1050): AC_ChargeParameterDiscovery -> ScheduleExchange -> PowerDelivery.
+// Time stamps are microseconds of SECC time, rising with every message
+// (V2G20-1534, -1537). Out of this edition: Plug & Charge
+// (CertificateInstallation, PnC authorization, MeteringConfirmation), BPT
+// (V2G), DC, value-added services, service renegotiation, resuming a paused
+// session (a new one is set up instead, V2G20-2547).
 
 import (
 	"encoding/hex"
@@ -57,7 +60,7 @@ var allowed20 = map[Phase][]exi.Kind20{
 	Phase20ScheduleExchange: {exi.K20ScheduleExchange, exi.K20SessionStop},
 	PhasePowerDelivery:      {exi.K20ScheduleExchange, exi.K20PowerDelivery, exi.K20SessionStop},
 	PhaseCharging:           {exi.K20ACChargeLoop, exi.K20PowerDelivery, exi.K20SessionStop},
-	PhaseStopped:            {exi.K20SessionStop, exi.K20PowerDelivery},
+	PhaseStopped:            {exi.K20SessionStop}, // V2G20-1623
 }
 
 func isAllowed20(p Phase, k exi.Kind20) bool {
@@ -81,7 +84,38 @@ func iso20Offered(st *State, cfg Config) bool { return cfg.ISO20 && TLS13(st.TLS
 
 // IsISO20 reports whether the payload type is one of ISO 15118-20 (the
 // CommonMessages or the AC stream).
-func IsISO20(pt uint16) bool { return pt == exi.PayloadISO20Main || pt == exi.PayloadISO20AC }
+func IsISO20(pt uint16) bool {
+	return pt == exi.PayloadISO20Main || pt == exi.PayloadISO20AC || pt == exi.PayloadISO20Reneg
+}
+
+// decode20: the side stream carries messages of both schemas; which one is
+// told by the renegotiation step expected (reneg) or, without a state, tried.
+func decode20(pt uint16, reneg string, known bool, payload []byte) (*exi.Request20, error) {
+	if pt != exi.PayloadISO20Reneg {
+		return exi.DecodeISO20(pt, payload)
+	}
+	if known {
+		if reneg == "" {
+			return exi.DecodeISO20(exi.PayloadISO20AC, payload)
+		}
+		return exi.DecodeISO20(exi.PayloadISO20Main, payload)
+	}
+	if q, err := exi.DecodeISO20(exi.PayloadISO20AC, payload); err == nil && q.Kind == exi.K20ACChargeParamDisc {
+		return q, nil
+	}
+	return exi.DecodeISO20(exi.PayloadISO20Main, payload)
+}
+
+// ts20: the next header time stamp of the session, microseconds of SECC time,
+// higher than every one before (V2G20-1534, -1537).
+func ts20(st *State, env Env) uint64 {
+	t := uint64(env.Now().UnixMicro())
+	if t <= st.LastTS {
+		t = st.LastTS + 1
+	}
+	st.LastTS = t
+	return t
+}
 
 // phases20: the station's phase count for the -20 power values.
 func (cfg Config) phases20() int {
@@ -111,6 +145,9 @@ func rat(v float64) exi.Rat { return exi.MakeRat(v) }
 func fptr(v float64) *float64 { return &v }
 
 func stepISO20(st *State, cfg Config, env Env, pt uint16, payload []byte) (*Result, error) {
+	if pt == exi.PayloadISO20Reneg {
+		return stepReneg20(st, cfg, env, payload)
+	}
 	q, err := exi.DecodeISO20(pt, payload)
 	if err != nil {
 		return nil, err
@@ -135,12 +172,19 @@ func stepISO20(st *State, cfg Config, env Env, pt uint16, payload []byte) (*Resu
 	return &Result{
 		EXI: out, PT: rpt, Request: q, Response: res,
 		RequestType: q.Type, ResponseType: res.Type,
-		Close: st.Phase == PhaseEnded, Events: events,
+		Close: closeAfter20(st, res), Events: events,
 	}, nil
 }
 
+// closeAfter20: after a FAILED response the SECC closes the connection
+// (V2G20-2222); after SessionStopRes OK it waits for the EV to close it (at
+// least 5 s, V2G20-1633), which the device does on the EV's side.
+func closeAfter20(st *State, res *exi.Response20) bool {
+	return st.Phase == PhaseEnded && exi.Failed20(res.ResponseCode)
+}
+
 func step20(st *State, cfg Config, env Env, q *exi.Request20) (*exi.Response20, []Event) {
-	res := &exi.Response20{Kind: q.Kind, SessionID: st.sessionIDBytes(), TimeStamp: uint64(env.Now().Unix()),
+	res := &exi.Response20{Kind: q.Kind, SessionID: st.sessionIDBytes(), TimeStamp: ts20(st, env),
 		ResponseCode: exi.RC20OK}
 	var events []Event
 
@@ -160,8 +204,15 @@ func step20(st *State, cfg Config, env Env, q *exi.Request20) (*exi.Response20, 
 
 	switch q.Kind {
 	case exi.K20SessionSetup:
+		// A new session (no resumption in this edition): an ID that is
+		// neither zero nor the one the EV sent (V2G20-2547, -2627).
 		sid := make([]byte, 8)
-		env.Random(sid)
+		for {
+			env.Random(sid)
+			if !allZero(sid) && hex.EncodeToString(sid) != hex.EncodeToString(q.SessionID) {
+				break
+			}
+		}
 		st.SessionID = hex.EncodeToString(sid)
 		res.SessionID = sid
 		res.ResponseCode = exi.RC20OKNewSession
@@ -226,10 +277,8 @@ func step20(st *State, cfg Config, env Env, q *exi.Request20) (*exi.Response20, 
 		ev20Needs(&st.EV, q)
 		res.ControlMode = st.ControlMode
 		res.EVSEProcessing = 0 // Finished
-		if st.ControlMode == exi.ModeScheduled {
-			st.SchedPowerW = cfg.powerW(cfg.effectiveCurrent())
-			res.ScheduleTuple, res.TimeAnchor = scheduleTupleID, uint64(env.Now().Unix())
-			res.Schedule = []exi.PowerEntry{{DurationS: 86400, Power: rat(st.SchedPowerW)}}
+		if p, scheduled := schedule20(res, cfg, st); scheduled {
+			st.SchedPowerW = p
 		}
 		st.Phase = PhasePowerDelivery
 		events = append(events, Event{Type: "session.ev_data", Data: st.EV})
@@ -252,23 +301,24 @@ func step20(st *State, cfg Config, env Env, q *exi.Request20) (*exi.Response20, 
 			st.Phase = PhaseStopped
 			events = append(events, Event{Type: "charging.stopped"})
 		case exi.Progress20Standby:
-			// The EV pauses inside the session and keeps the loop: OK
-			// (to check against the text: WARNING_StandbyNotAllowed is the
-			// alternative, ADR-004).
+			// The EV stops drawing current and keeps the loop: the next
+			// request is AC_ChargeLoopReq (V2G20-1194, -2192).
 			if st.Phase != PhaseCharging && st.Phase != PhasePowerDelivery {
 				return fail(exi.RC20FailedSequenceError, "Standby outside the charge loop")
 			}
 			st.Phase = PhaseCharging
 		case exi.Progress20ScheduleRenegotiation:
-			if st.Phase != PhaseCharging {
-				return fail(exi.RC20FailedSequenceError, "ScheduleRenegotiation outside the charge loop")
-			}
-			st.Phase = Phase20ScheduleExchange
+			// Renegotiation runs on the side stream 0x8101, not on the main
+			// stream (V2G20-1045, -2018).
+			return fail(exi.RC20FailedSequenceError, "ScheduleRenegotiation on the main stream")
 		}
 
 	case exi.K20ACChargeLoop:
 		st.ChargingStatusCount++
 		ev20Loop(&st.EV, q)
+		if q.MeterInfoRequested {
+			st.MeterRequested = true // from now on in every answer (V2G20-1082)
+		}
 
 	case exi.K20SessionStop:
 		switch {
@@ -325,8 +375,7 @@ func fill20(res *exi.Response20, cfg Config, st *State) {
 			}
 		}
 		if res.ControlMode == exi.ModeScheduled && len(res.Schedule) == 0 {
-			res.ScheduleTuple = scheduleTupleID
-			res.Schedule = []exi.PowerEntry{{DurationS: 86400, Power: rat(cfg.powerW(cfg.effectiveCurrent()))}}
+			schedule20(res, cfg, st)
 		}
 	case exi.K20ACChargeLoop:
 		loopRes20(res, cfg, st, -1)
@@ -342,11 +391,16 @@ func loopRes20(res *exi.Response20, cfg Config, st *State, notification int) {
 	if res.ControlMode == exi.ModeNone {
 		res.ControlMode = exi.ModeDynamic
 	}
-	res.Notification, res.NotificationMaxDelay, res.TargetPower = nil, 0, nil
+	res.Notification, res.NotificationMaxDelay, res.TargetPower, res.Meter = nil, 0, nil, nil
 	if res.ControlMode == exi.ModeDynamic {
 		tp := rat(targetPowerW(st, cfg))
+		if notification == exi.Notif20Terminate {
+			tp = exi.Rat{} // Terminate while decreasing the power (V2G20-1959)
+		}
 		res.TargetPower = &tp
-	} else if math.Abs(cfg.powerW(cfg.effectiveCurrent())-st.SchedPowerW) >= 1 {
+	} else if st.Reneg == "" && math.Abs(cfg.powerW(cfg.effectiveCurrent())-st.SchedPowerW) >= 1 {
+		// The station's power is no longer the schedule's: the EV renegotiates
+		// on the side stream (V2G20-1845); not asked again while it does.
 		n := exi.Notif20ScheduleRenegotiation
 		res.Notification, res.NotificationMaxDelay = &n, notifyMaxDelayS
 	}
@@ -354,6 +408,119 @@ func loopRes20(res *exi.Response20, cfg Config, st *State, notification int) {
 		n := notification
 		res.Notification, res.NotificationMaxDelay = &n, 0
 	}
+	if st.MeterRequested {
+		res.Meter = &exi.MeterInfo20{MeterID: meterID(cfg), ChargedWh: uint64(math.Max(0, math.Round(st.MeterWh)))}
+	}
+}
+
+// meterID: the station's identity. There is no certified meter: the energy
+// comes from the device's current readings at the nominal voltage.
+func meterID(cfg Config) string {
+	id := cfg.EVSEID
+	if id == "" {
+		id = "imatra"
+	}
+	if len(id) > 32 {
+		id = id[:32]
+	}
+	return id
+}
+
+// schedule20 fills the ScheduleExchangeRes. Scheduled: one tuple, one entry
+// at the station's power for a day from now (TimeAnchor: microseconds of SECC
+// time, V2G20-1861). No power: GoToPause and the entry at 0 W (V2G20-2121).
+// Returns the schedule's power and whether a schedule was given.
+func schedule20(res *exi.Response20, cfg Config, st *State) (float64, bool) {
+	p := math.Max(0, cfg.powerW(cfg.effectiveCurrent()))
+	res.GoToPause = p < 1
+	if res.ControlMode != exi.ModeScheduled {
+		return p, false
+	}
+	res.ScheduleTuple, res.TimeAnchor = scheduleTupleID, res.TimeStamp
+	res.Schedule = []exi.PowerEntry{{DurationS: 86400, Power: rat(p)}}
+	return p, true
+}
+
+func allZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// stepReneg20: schedule renegotiation on the side stream 0x8101 while the
+// loop goes on (V2G20-1045 to -1050): AC_ChargeParameterDiscovery ->
+// ScheduleExchange -> PowerDelivery; the new schedule is in force from the
+// PowerDelivery on. Answers go on the same payload type. The phase stays
+// Charging. A renegotiation the station wants is started by the EV
+// (EVSENotification ScheduleRenegotiation in the loop answer).
+func stepReneg20(st *State, cfg Config, env Env, payload []byte) (*Result, error) {
+	q, err := decode20(exi.PayloadISO20Reneg, st.Reneg, true, payload)
+	if err != nil {
+		return nil, err
+	}
+	if q.Kind == exi.K20Unknown || q.Kind == exi.K20Other {
+		return nil, fmt.Errorf("ISO 15118-20 %s on the renegotiation stream not supported", q.Type)
+	}
+	res := &exi.Response20{Kind: q.Kind, SessionID: st.sessionIDBytes(), TimeStamp: ts20(st, env),
+		ResponseCode: exi.RC20OK}
+	var events []Event
+	fail := func(rc int, reason string) {
+		res.ResponseCode = rc
+		st.Reneg = ""
+		st.Phase, st.EndReason = PhaseEnded, reason
+		events = append(events, Event{Type: "session.failed", Data: map[string]any{"reason": reason, "request": q.Type}})
+	}
+	expect := map[string]exi.Kind20{"": exi.K20ACChargeParamDisc, "schedule": exi.K20ScheduleExchange,
+		"delivery": exi.K20PowerDelivery}[st.Reneg]
+	switch {
+	case hex.EncodeToString(q.SessionID) != st.SessionID:
+		fail(exi.RC20FailedUnknownSession, "unknown session id")
+	case st.Phase != PhaseCharging || q.Kind != expect:
+		fail(exi.RC20FailedSequenceError, fmt.Sprintf("%s on the renegotiation stream in %s/%q", q.Type, st.Phase, st.Reneg))
+	case q.Kind == exi.K20ACChargeParamDisc:
+		if q.BPT || q.MaxPower == nil {
+			fail(exi.RC20FailedWrongChargeParameter, "BPT or no AC charge parameters (AC only)")
+			break
+		}
+		st.EV.EVMaxPowerW = fptr(q.MaxPower.Float())
+		if q.MinPower != nil {
+			st.EV.EVMinPowerW = fptr(q.MinPower.Float())
+		}
+		st.Reneg = "schedule"
+	case q.Kind == exi.K20ScheduleExchange:
+		if q.ControlMode != st.ControlMode {
+			fail(exi.RC20Failed, "control mode other than the selected one")
+			break
+		}
+		ev20Needs(&st.EV, q)
+		res.ControlMode = st.ControlMode
+		st.RenegPowerW, _ = schedule20(res, cfg, st)
+		st.Reneg = "delivery"
+		events = append(events, Event{Type: "session.ev_data", Data: st.EV})
+	case q.Kind == exi.K20PowerDelivery:
+		if q.EVProcessing != nil && *q.EVProcessing != 0 {
+			break // still preparing its profile: answer, stay
+		}
+		if st.ControlMode == exi.ModeScheduled && (q.SelectedScheduleTuple == nil || *q.SelectedScheduleTuple != scheduleTupleID) {
+			fail(exi.RC20FailedScheduleSelectionInvalid, "schedule tuple not offered")
+			break
+		}
+		st.SchedPowerW, st.Reneg = st.RenegPowerW, ""
+		events = append(events, Event{Type: "schedule.renegotiated", Data: map[string]any{"power_w": st.SchedPowerW}})
+	}
+	fill20(res, cfg, st)
+	out, _, err := exi.EncodeISO20Res(res)
+	if err != nil {
+		return nil, fmt.Errorf("encode %v: %w", res.Kind, err)
+	}
+	return &Result{
+		EXI: out, PT: exi.PayloadISO20Reneg, Request: q, Response: res,
+		RequestType: q.Type, ResponseType: res.Type,
+		Close: closeAfter20(st, res), Events: events,
+	}, nil
 }
 
 // ev20Needs: the EV's mobility needs from ScheduleExchangeReq. EAmountWh is
@@ -418,7 +585,13 @@ func LoopSample20(pt uint16, payload []byte) (*exi.Request20, error) {
 // with the bit offset of its time stamp, which the device overwrites with the
 // current time when it answers.
 func pair20(st *State, cfg Config, now time.Time) (*Pair, error) {
-	ts := uint64(now.Unix())
+	// Higher than every time stamp the EV has seen; the device writes a
+	// higher one again each time it answers from the pair (V2G20-1537).
+	ts := uint64(now.UnixMicro())
+	if ts <= st.LastTS {
+		ts = st.LastTS + 1
+	}
+	st.LastTS = ts
 	enc := func(r *exi.Response20) ([]byte, uint16, int, error) {
 		b, pt, err := exi.EncodeISO20Res(r)
 		if err != nil {
@@ -432,7 +605,7 @@ func pair20(st *State, cfg Config, now time.Time) (*Pair, error) {
 		loopRes20(r, cfg, st, notification)
 		return r
 	}
-	p := &Pair{ReqBits: st.CLReqBits}
+	p := &Pair{TS: ts, ReqBits: st.CLReqBits}
 	var err error
 	if p.Res, p.PT, p.ResTS, err = enc(loop(-1)); err != nil {
 		return nil, err
@@ -450,7 +623,7 @@ func pair20(st *State, cfg Config, now time.Time) (*Pair, error) {
 	}
 	// The key ignores the time stamp: a new pair only when the answer changes.
 	k := append([]byte(nil), p.Res...)
-	if err := exi.WriteTimeStamp(k, p.ResTS, 1<<28); err != nil {
+	if err := exi.WriteTimeStamp(k, p.ResTS, exi.TimeStampMin); err != nil {
 		return nil, err
 	}
 	p.Key = hex.EncodeToString(k)

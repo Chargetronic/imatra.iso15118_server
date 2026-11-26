@@ -50,6 +50,10 @@ type Up struct {
 	// Plug: the plug-in id ("<boot>-<n>") the device was in when it sent this
 	// (ADR-003); "" from a device before 0.3.2.
 	Plug string `json:"plug,omitempty"`
+	// LastTS (ISO 15118-20): the highest header time stamp, microseconds,
+	// the device wrote into an answer from its cache on this connection; the
+	// server's next answer is higher (V2G20-1537, ADR-005). 0: none yet.
+	LastTS uint64 `json:"last_ts,omitempty"`
 }
 
 // Down is the engine's answer.
@@ -108,6 +112,9 @@ type CachePair struct {
 	ResTS   int      `json:"res_ts_bit,omitempty"`
 	TermPT  []uint16 `json:"term_pt,omitempty"`
 	TermTS  []int    `json:"term_ts_bit,omitempty"`
+	// TS: the time stamp (microseconds) the answers were encoded with; the
+	// device writes max(its clock, TS + 1, its last + 1) each time.
+	TS uint64 `json:"ts,omitempty"`
 	// CommandID: the operator command this answer carries (its limit), echoed
 	// back in the Ack; 0 when the pair follows from the station settings only.
 	CommandID int64 `json:"command_id,omitempty"`

@@ -19,12 +19,14 @@ var cfg20 = Config{EVSEID: "FI*CTR*E20TEST", MaxCurrentA: 16, NominalVoltageV: 2
 
 // ev20 drives one ISO 15118-20 AC EIM session against Step, as an EV would.
 type ev20 struct {
-	t   *testing.T
-	st  *State
-	cfg Config
-	env Env
-	sid []byte
-	now time.Time
+	t      *testing.T
+	st     *State
+	cfg    Config
+	env    Env
+	sid    []byte
+	now    time.Time
+	last   *Result
+	prevTS uint64
 }
 
 func newEV20(t *testing.T, tls string, cfg Config) *ev20 {
@@ -52,28 +54,52 @@ func (e *ev20) send(q *exi.Request20) *exi.Response20 {
 	if q.SessionID == nil {
 		q.SessionID = e.sid
 	}
-	q.TimeStamp = uint64(e.now.Unix())
+	q.TimeStamp = uint64(e.now.UnixMicro())
 	b, pt, err := exi.EncodeISO20Req(q)
 	if err != nil {
 		e.t.Fatalf("%v: encode: %v", q.Kind, err)
 	}
+	return e.sendPT(q, pt, b)
+}
+
+// sendReneg sends a request on the schedule renegotiation side stream.
+func (e *ev20) sendReneg(q *exi.Request20) *exi.Response20 {
+	e.t.Helper()
+	q.SessionID, q.TimeStamp = e.sid, uint64(e.now.UnixMicro())
+	b, _, err := exi.EncodeISO20Req(q)
+	if err != nil {
+		e.t.Fatalf("%v: encode: %v", q.Kind, err)
+	}
+	return e.sendPT(q, exi.PayloadISO20Reneg, b)
+}
+
+func (e *ev20) sendPT(q *exi.Request20, pt uint16, b []byte) *exi.Response20 {
+	e.t.Helper()
 	r, err := StepPT(e.st, e.cfg, e.env, pt, b)
 	if err != nil {
 		e.t.Fatalf("%v: step: %v", q.Kind, err)
 	}
-	if r.PT != q.Kind.PayloadType() {
+	e.last = r
+	want := q.Kind.PayloadType()
+	if pt == exi.PayloadISO20Reneg {
+		want = pt // answers go on the side stream they came on
+	}
+	if r.PT != want {
 		e.t.Fatalf("%v: response in payload type 0x%04x", q.Kind, r.PT)
 	}
-	res, err := exi.DecodeISO20Res(r.PT, r.EXI)
+	res, err := exi.DecodeISO20Res(q.Kind.PayloadType(), r.EXI)
 	if err != nil {
 		e.t.Fatalf("%v: decode the response: %v", q.Kind, err)
 	}
 	if res.Kind != q.Kind {
 		e.t.Fatalf("%v answered with %v", q.Kind, res.Kind)
 	}
-	if res.TimeStamp != uint64(e.now.Unix()) {
-		e.t.Fatalf("%v: response time stamp %d", q.Kind, res.TimeStamp)
+	// microseconds of SECC time, never below the clock, always rising
+	// (V2G20-1534, -1537)
+	if res.TimeStamp < uint64(e.now.UnixMicro()) || res.TimeStamp <= e.prevTS {
+		e.t.Fatalf("%v: response time stamp %d (clock %d, previous %d)", q.Kind, res.TimeStamp, e.now.UnixMicro(), e.prevTS)
 	}
+	e.prevTS = res.TimeStamp
 	e.t.Logf("%-30s -> %-30s %-26s %3d B  %s", r.RequestType, r.ResponseType, res.ResponseName, len(r.EXI), e.st.Phase)
 	e.now = e.now.Add(200 * time.Millisecond)
 	return res
@@ -87,7 +113,7 @@ func ok(t *testing.T, r *exi.Response20) {
 }
 
 func (e *ev20) loop(mode int, soc int8, watts int16) []byte {
-	q := &exi.Request20{Kind: exi.K20ACChargeLoop, SessionID: e.sid, TimeStamp: uint64(e.now.Unix()),
+	q := &exi.Request20{Kind: exi.K20ACChargeLoop, SessionID: e.sid, TimeStamp: uint64(e.now.UnixMicro()),
 		ControlMode: mode, PresentSoC: &soc, PresentPower: &exi.Rat{Value: watts}}
 	if mode == exi.ModeDynamic {
 		q.TargetEnergy, q.MaxEnergy, q.MinEnergy = &exi.Rat{Value: 18, Exponent: 3}, &exi.Rat{Value: 40, Exponent: 3}, &exi.Rat{}
@@ -188,14 +214,24 @@ func (e *ev20) stepLoop(b []byte) *exi.Response20 {
 var pairReq []byte
 
 // deviceAnswer answers a loop request from the pair as the device firmware
-// does (ADR-005): prefix compare, then the current time into the response.
-func deviceAnswer(t *testing.T, p *Pair, req []byte, now time.Time) ([]byte, bool) {
+// does (ADR-005): prefix compare, then a time stamp into the response that is
+// its clock in microseconds, but always above the pair's and its own last one
+// (V2G20-1537).
+func deviceAnswer(t *testing.T, p *Pair, req []byte, now time.Time, last *uint64) ([]byte, bool) {
 	t.Helper()
 	if !exi.PrefixMatch(pairReq, req, p.ReqBits) {
 		return nil, false
 	}
+	ts := uint64(now.UnixMicro())
+	if ts <= p.TS {
+		ts = p.TS + 1
+	}
+	if ts <= *last {
+		ts = *last + 1
+	}
+	*last = ts
 	out := append([]byte(nil), p.Res...)
-	if err := exi.WriteTimeStamp(out, p.ResTS, uint64(now.Unix())); err != nil {
+	if err := exi.WriteTimeStamp(out, p.ResTS, ts); err != nil {
 		t.Fatal(err)
 	}
 	return out, true
@@ -227,9 +263,10 @@ func TestISO20DynamicSession(t *testing.T) {
 	}
 	// Later loop requests (new time, new values) are answered by the device,
 	// with its own time, and the EV reads the server's answer.
+	var last uint64
 	for i, soc := range []int8{41, 55, 79} {
 		e.now = e.now.Add(time.Duration(i+1) * time.Minute)
-		ans, hit := deviceAnswer(t, p, e.loop(exi.ModeDynamic, soc, 10_900), e.now)
+		ans, hit := deviceAnswer(t, p, e.loop(exi.ModeDynamic, soc, 10_900), e.now, &last)
 		if !hit {
 			t.Fatalf("loop request #%d missed the cache", i+2)
 		}
@@ -237,14 +274,14 @@ func TestISO20DynamicSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d.TimeStamp != uint64(e.now.Unix()) || d.TargetPower.Float() != 11_000 || !bytes.Equal(d.SessionID, sid20) {
+		if d.TimeStamp != last || d.TargetPower.Float() != 11_000 || !bytes.Equal(d.SessionID, sid20) {
 			t.Fatalf("cached answer %+v", d)
 		}
 	}
 	// Other requests never match.
 	pdStop, _, _ := exi.EncodeISO20Req(&exi.Request20{Kind: exi.K20PowerDelivery, SessionID: e.sid, TimeStamp: 1 << 30,
 		EVProcessing: ptrTo(0), ChargeProgress: ptrTo(exi.Progress20Stop)})
-	if _, hit := deviceAnswer(t, p, pdStop, e.now); hit {
+	if _, hit := deviceAnswer(t, p, pdStop, e.now, &last); hit {
 		t.Fatal("PowerDeliveryReq matched the loop pair")
 	}
 
@@ -267,15 +304,15 @@ func TestISO20DynamicSession(t *testing.T) {
 	// SessionStop, each with the time written by the device.
 	for i, b := range p3.Term {
 		out := append([]byte(nil), b...)
-		if err := exi.WriteTimeStamp(out, p3.TermTS[i], 1_900_000_000); err != nil {
+		if err := exi.WriteTimeStamp(out, p3.TermTS[i], 1_900_000_000_000_000); err != nil {
 			t.Fatal(err)
 		}
 		d, err := exi.DecodeISO20Res(p3.TermPT[i], out)
-		if err != nil || d.TimeStamp != 1_900_000_000 || exi.Failed20(d.ResponseCode) {
+		if err != nil || d.TimeStamp != 1_900_000_000_000_000 || exi.Failed20(d.ResponseCode) {
 			t.Fatalf("term #%d: %+v %v", i, d, err)
 		}
-		if i == 0 && (d.Notification == nil || *d.Notification != exi.Notif20Terminate) {
-			t.Fatalf("term #0 without Terminate: %+v", d)
+		if i == 0 && (d.Notification == nil || *d.Notification != exi.Notif20Terminate || d.TargetPower.Float() != 0) {
+			t.Fatalf("term #0: Terminate with the power down to 0 (V2G20-1959): %+v", d)
 		}
 	}
 
@@ -283,6 +320,9 @@ func TestISO20DynamicSession(t *testing.T) {
 	ok(t, e.send(&exi.Request20{Kind: exi.K20SessionStop, ChargingSession: ptrTo(exi.Session20Terminate)}))
 	if e.st.Phase != PhaseEnded || e.st.EndReason != "terminated by EV" {
 		t.Fatalf("end %s %s", e.st.Phase, e.st.EndReason)
+	}
+	if e.last.Close {
+		t.Fatal("SessionStopRes OK: the EV closes the connection, not the SECC (V2G20-1633)")
 	}
 }
 
@@ -299,16 +339,92 @@ func TestISO20ScheduledRenegotiation(t *testing.T) {
 	if r.Notification == nil || *r.Notification != exi.Notif20ScheduleRenegotiation {
 		t.Fatalf("no ScheduleRenegotiation: %+v", r)
 	}
-	ok(t, e.send(&exi.Request20{Kind: exi.K20PowerDelivery, EVProcessing: ptrTo(0), ChargeProgress: ptrTo(exi.Progress20ScheduleRenegotiation)}))
-	se := e.send(&exi.Request20{Kind: exi.K20ScheduleExchange, MaxSupportingPoints: ptrTo(uint16(24)), ControlMode: exi.ModeScheduled})
-	ok(t, se)
-	if se.Schedule[0].Power.Float() != 10*230*3 {
-		t.Fatalf("new schedule %+v", se.Schedule)
+	// The EV renegotiates on the side stream 0x8101 while the loop goes on
+	// (V2G20-1045 to -1050).
+	ok(t, e.sendReneg(&exi.Request20{Kind: exi.K20ACChargeParamDisc, MaxPower: &exi.Rat{Value: 11, Exponent: 3},
+		MinPower: &exi.Rat{Value: 1380}}))
+	if r = e.stepLoop(e.loop(exi.ModeScheduled, 31, 11_000)); r.Notification != nil {
+		t.Fatalf("asked again while renegotiating: %+v", r)
 	}
-	ok(t, e.send(&exi.Request20{Kind: exi.K20PowerDelivery, EVProcessing: ptrTo(0), ChargeProgress: ptrTo(exi.Progress20Start),
+	se := e.sendReneg(&exi.Request20{Kind: exi.K20ScheduleExchange, MaxSupportingPoints: ptrTo(uint16(24)), ControlMode: exi.ModeScheduled})
+	ok(t, se)
+	if se.Schedule[0].Power.Float() != 10*230*3 || se.TimeAnchor != se.TimeStamp {
+		t.Fatalf("new schedule %+v anchor %d", se.Schedule, se.TimeAnchor)
+	}
+	ok(t, e.sendReneg(&exi.Request20{Kind: exi.K20PowerDelivery, EVProcessing: ptrTo(0), ChargeProgress: ptrTo(exi.Progress20ScheduleRenegotiation),
 		ProfileMode: exi.ModeScheduled, SelectedScheduleTuple: ptrTo(uint32(1))}))
+	if e.st.Phase != PhaseCharging || e.st.Reneg != "" || e.st.SchedPowerW != 10*230*3 {
+		t.Fatalf("after renegotiation: %s %q %v", e.st.Phase, e.st.Reneg, e.st.SchedPowerW)
+	}
 	if r = e.stepLoop(e.loop(exi.ModeScheduled, 32, 6_900)); r.Notification != nil {
 		t.Fatalf("still renegotiating: %+v", r)
+	}
+	// On the main stream, ScheduleRenegotiation is a sequence error (V2G20-2018).
+	r = e.send(&exi.Request20{Kind: exi.K20PowerDelivery, EVProcessing: ptrTo(0), ChargeProgress: ptrTo(exi.Progress20ScheduleRenegotiation)})
+	if r.ResponseCode != exi.RC20FailedSequenceError || !e.last.Close {
+		t.Fatalf("main-stream renegotiation: %s close %v", r.ResponseName, e.last.Close)
+	}
+}
+
+// MeterInfo in every loop answer once the EV asks for it (V2G20-1082),
+// also in the device's pair; the energy is the engine's (st.MeterWh).
+func TestISO20MeterInfo(t *testing.T) {
+	e := newEV20(t, "TLSv1.3", cfg20)
+	e.setup(exi.ModeDynamic)
+	r := e.stepLoop(e.loop(exi.ModeDynamic, 40, 0))
+	if r.Meter != nil {
+		t.Fatal("MeterInfo not asked for")
+	}
+	b := e.loop(exi.ModeDynamic, 41, 0)
+	q, _ := exi.DecodeISO20(exi.PayloadISO20AC, b)
+	q.MeterInfoRequested = true
+	b, _, _ = exi.EncodeISO20Req(q)
+	if r = e.stepLoop(b); r.Meter == nil || r.Meter.ChargedWh != 0 || r.Meter.MeterID != cfg20.EVSEID {
+		t.Fatalf("first MeterInfo %+v", r.Meter)
+	}
+	e.st.MeterWh = 1234.4
+	p, err := CachePairOf(e.st, e.cfg, e.now)
+	if err != nil || p == nil {
+		t.Fatal(err)
+	}
+	d, _ := exi.DecodeISO20Res(p.PT, p.Res)
+	if d.Meter == nil || d.Meter.ChargedWh != 1234 {
+		t.Fatalf("MeterInfo in the pair %+v", d.Meter)
+	}
+}
+
+// Time stamps rise across the server's answers and the device's (V2G20-1537).
+func TestISO20TimeStampsRise(t *testing.T) {
+	e := newEV20(t, "TLSv1.3", cfg20)
+	e.setup(exi.ModeDynamic)
+	e.stepLoop(e.loop(exi.ModeDynamic, 40, 0))
+	// the device answered from the cache with a clock ahead of the server's
+	ahead := uint64(e.now.Add(3 * time.Second).UnixMicro())
+	e.st.LastTS = ahead // the engine takes it from the device's last_ts
+	r := e.stepLoop(e.loop(exi.ModeDynamic, 41, 0))
+	if r.TimeStamp <= ahead {
+		t.Fatalf("server answer %d not above the device's %d", r.TimeStamp, ahead)
+	}
+	p, _ := CachePairOf(e.st, e.cfg, e.now)
+	if p.TS <= r.TimeStamp {
+		t.Fatalf("pair time stamp %d not above %d", p.TS, r.TimeStamp)
+	}
+}
+
+// No power at the station: GoToPause, the schedule's first entry 0 W (V2G20-2121).
+func TestISO20GoToPause(t *testing.T) {
+	cf := cfg20
+	cf.MaxCurrentA = 0
+	res := &exi.Response20{Kind: exi.K20ScheduleExchange, ControlMode: exi.ModeScheduled, TimeStamp: 1 << 50}
+	if p, _ := schedule20(res, cf, NewState(time.Now())); p != 0 || !res.GoToPause || res.Schedule[0].Power.Float() != 0 {
+		t.Fatalf("%+v", res)
+	}
+	b, _, err := exi.EncodeISO20Res(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := exi.DecodeISO20Res(exi.PayloadISO20Main, b); !d.GoToPause {
+		t.Fatal("GoToPause lost in encoding")
 	}
 }
 
@@ -349,7 +465,7 @@ func TestISO20Errors(t *testing.T) {
 	}
 	// state lost: a mid-session -20 request resumes from SessionSetup and fails
 	st := NewState(time.Now())
-	b, pt, _ := exi.EncodeISO20Req(&exi.Request20{Kind: exi.K20ServiceDiscovery, SessionID: sid20, TimeStamp: 1 << 30})
+	b, pt, _ := exi.EncodeISO20Req(&exi.Request20{Kind: exi.K20ServiceDiscovery, SessionID: sid20, TimeStamp: 1 << 50})
 	if !ResumePT(st, pt, b) || st.Protocol != exi.NamespaceISO20AC {
 		t.Fatal("no resume of a -20 request")
 	}

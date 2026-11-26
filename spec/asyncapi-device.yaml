@@ -371,15 +371,21 @@ components:
             AC_ChargeLoopReq changes every time (time stamp, the EV's values),
             so only the first `req_bits` bits of `req` and the payload type
             `pt` are compared; before sending `res` (or `term[i]`) the device
-            writes the current Unix time as an EXI unsigned integer of five
-            7-bit groups (40 bits, least significant group first, continuation
-            bit 1 on the first four octets, MSB first into the stream) at bit
-            `res_ts_bit` (`term_ts_bit[i]`), and sends `term[i]` with payload
-            type `term_pt[i]`. A device that does not know `kind` compares all
-            bytes, never hits, and sends every loop request to the server.
+            writes a time stamp into it: microseconds of SECC time (UTC, ISO
+            15118-20 V2G20-1534), max(its clock, `ts` + 1, the last one it
+            wrote on this connection + 1), so that every time stamp the EV gets
+            is higher than the one before (V2G20-1537). Encoding: an EXI
+            unsigned integer of eight 7-bit groups (64 bits, least significant
+            group first, continuation bit 1 on the first seven octets, MSB
+            first into the stream) at bit `res_ts_bit` (`term_ts_bit[i]`).
+            `term[i]` goes with payload type `term_pt[i]`. The device reports
+            the last one it wrote in `last_ts` of every `v2g/up`. A device that
+            does not know `kind` compares all bytes, never hits, and sends
+            every loop request to the server.
         pt: { type: integer, description: 'kind prefix: payload type of the loop request and of res; 32771 (0x8003) = ISO 15118-20 AC' }
         req_bits: { type: integer, minimum: 1, description: 'kind prefix: leading bits of req compared (message type and session ID)' }
-        res_ts_bit: { type: integer, minimum: 0, description: 'kind prefix: bit offset of the time stamp in res' }
+        res_ts_bit: { type: integer, minimum: 0, description: 'kind prefix: bit offset of the time stamp (64 bits) in res' }
+        ts: { type: integer, format: int64, description: 'kind prefix: the time stamp res and term were encoded with, microseconds; every time stamp the device writes is higher' }
         term_pt:
           type: array
           description: 'kind prefix: payload type of each term answer (AC_ChargeLoopRes 0x8003, PowerDeliveryRes and SessionStopRes 0x8002)'
@@ -396,7 +402,7 @@ components:
         v: { $ref: '#/components/schemas/ProtocolVersion' }
         conn: { $ref: '#/components/schemas/ConnId' }
         seq: { type: integer, minimum: 1, description: 'Per connection, from 1' }
-        pt: { type: integer, description: 'V2GTP payload type of the frame: 32769 (0x8001) supportedAppProtocol, ISO 15118-2, DIN 70121; ISO 15118-20: 32770 (0x8002) CommonMessages, 32771 (0x8003) AC. Absent = 0x8001' }
+        pt: { type: integer, description: 'V2GTP payload type of the frame: 32769 (0x8001) supportedAppProtocol, ISO 15118-2, DIN 70121; ISO 15118-20: 32770 (0x8002) CommonMessages, 32771 (0x8003) AC, 33025 (0x8101) schedule renegotiation side stream. Absent = 0x8001' }
         exi: { $ref: '#/components/schemas/Base64', description: 'Payload without the V2GTP header' }
         wire_bytes: { type: integer, description: 'Request size as received from the EV (V2GTP header + EXI)' }
         sampled: { type: boolean, description: 'A cache hit forwarded as a liveness sign; not answered' }
@@ -406,6 +412,7 @@ components:
         t_ev_rx: { $ref: '#/components/schemas/Micros', description: 'Device received it from the EV' }
         t_up_tx: { $ref: '#/components/schemas/Micros', description: 'Device published it' }
         plug: { $ref: '#/components/schemas/PlugId' }
+        last_ts: { type: integer, format: int64, description: 'ISO 15118-20: the highest time stamp (microseconds) the device wrote into an answer from its cache on this connection; the server answers higher (V2G20-1537). Absent = none yet' }
 
     Down:
       type: object

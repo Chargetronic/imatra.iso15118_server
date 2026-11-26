@@ -10,7 +10,7 @@ import (
 
 var sid20 = []byte{1, 2, 3, 4, 5, 6, 7, 8}
 
-const ts20 = 1_800_000_000
+const ts20 = 1_800_000_000_000_000 // microseconds (V2G20-1534)
 
 func TestISO20RequestRoundTrip(t *testing.T) {
 	cases := []*Request20{
@@ -179,7 +179,19 @@ func TestISO20LoopPrefix(t *testing.T) {
 
 func TestWriteTimeStampRange(t *testing.T) {
 	b := make([]byte, 8)
-	if WriteTimeStamp(b, 0, 1<<28-1) == nil || WriteTimeStamp(b, 0, 1<<35) == nil || WriteTimeStamp(b, 30, ts20) == nil {
+	if WriteTimeStamp(b, 0, TimeStampMin-1) == nil || WriteTimeStamp(b, 0, TimeStampMax+1) == nil || WriteTimeStamp(b, 30, ts20) == nil {
 		t.Fatal("out-of-range time or field accepted")
+	}
+}
+
+func TestTimeStampWriteRead(t *testing.T) {
+	b := make([]byte, 12)
+	for _, ts := range []uint64{TimeStampMin, ts20, TimeStampMax} {
+		if err := WriteTimeStamp(b, 5, ts); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := ReadTimeStamp(b, 5); err != nil || got != ts {
+			t.Fatalf("%d: read %d %v", ts, got, err)
+		}
 	}
 }

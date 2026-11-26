@@ -144,5 +144,9 @@ func DecodeISO20Res(pt uint16, data []byte) (*Response20, error) {
 	if r.has_target_power != 0 {
 		s.TargetPower = ptr(ratFrom(r.target_power))
 	}
+	s.GoToPause = r.go_to_pause != 0
+	if r.has_meter_info != 0 {
+		s.Meter = &MeterInfo20{MeterID: C.GoString(&r.meter_id[0]), ChargedWh: uint64(r.charged_energy_wh)}
+	}
 	return s, nil
 }
