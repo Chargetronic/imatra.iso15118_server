@@ -418,7 +418,7 @@ func loopRes20(res *exi.Response20, cfg Config, st *State, notification int) {
 func meterID(cfg Config) string {
 	id := cfg.EVSEID
 	if id == "" {
-		id = "imatra"
+		id = "SECC" // no EVSEID configured
 	}
 	if len(id) > 32 {
 		id = id[:32]
