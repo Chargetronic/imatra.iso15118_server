@@ -50,6 +50,10 @@ type Up struct {
 	// Plug: the plug-in id ("<boot>-<n>") the device was in when it sent this
 	// (ADR-003); "" from a device before 0.3.2.
 	Plug string `json:"plug,omitempty"`
+	// LastTS (ISO 15118-20): the highest header time stamp, microseconds,
+	// the device wrote into an answer from its cache on this connection; the
+	// server's next answer is higher (V2G20-1537, ADR-005). 0: none yet.
+	LastTS uint64 `json:"last_ts,omitempty"`
 }
 
 // Down is the engine's answer.
@@ -87,12 +91,32 @@ type Trace struct {
 // CachePair: the EV's ChargingStatusReq bytes, the response to give for
 // them, and the local termination scenario (StopCharging, PowerDeliveryRes,
 // SessionStopRes). Ver: newer replaces older; TTLS also renews the TTL.
+//
+// One algorithm on the device for both protocol versions (ADR-005): compare
+// the first ReqBits bits of Req and the payload type PT; on a hit send Res;
+// when ResTS is set, first write the time stamp there (ISO 15118-20: 64 bits,
+// microseconds, above TS and the last one). Term[i] goes with TermPT[i], its
+// time stamp at TermTS[i] when set. ISO 15118-2: ReqBits is the whole request
+// (it is constant), no time stamp. A device that only compares all bytes gets
+// the same result for ISO 15118-2 and never hits for ISO 15118-20 (every loop
+// request goes to the server: no wrong answer).
 type CachePair struct {
 	Ver  int64    `json:"ver"`
 	Req  []byte   `json:"req"`
 	Res  []byte   `json:"res"`
 	Term [][]byte `json:"term,omitempty"`
 	TTLS int      `json:"ttl_s"`
+	// Kind: "prefix" for ISO 15118-20 (informational: the device needs no
+	// branch, it follows ReqBits and ResTS).
+	Kind    string   `json:"kind,omitempty"`
+	PT      uint16   `json:"pt,omitempty"`
+	ReqBits int      `json:"req_bits,omitempty"`
+	ResTS   *int     `json:"res_ts_bit,omitempty"`
+	TermPT  []uint16 `json:"term_pt,omitempty"`
+	TermTS  []int    `json:"term_ts_bit,omitempty"`
+	// TS: the time stamp (microseconds) the answers were encoded with; the
+	// device writes max(its clock, TS + 1, its last + 1) each time.
+	TS uint64 `json:"ts,omitempty"`
 	// CommandID: the operator command this answer carries (its limit), echoed
 	// back in the Ack; 0 when the pair follows from the station settings only.
 	CommandID int64 `json:"command_id,omitempty"`

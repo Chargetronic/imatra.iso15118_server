@@ -269,6 +269,7 @@
        "protocol": {
         "enum": [
          "iso15118-2",
+         "iso15118-20",
          "din70121"
         ]
        },
@@ -367,6 +368,37 @@
        },
        "energy_transfer_mode": {
         "type": "integer"
+       },
+       "ev_min_power_w": {
+        "type": "number",
+        "description": "ISO 15118-20: EVMinimumChargePower"
+       },
+       "ev_target_energy_wh": {
+        "type": "number",
+        "description": "ISO 15118-20: EVTargetEnergyRequest (also given as e_amount_wh)"
+       },
+       "ev_max_energy_wh": {
+        "type": "number",
+        "description": "ISO 15118-20: EVMaximumEnergyRequest"
+       },
+       "ev_min_energy_wh": {
+        "type": "number",
+        "description": "ISO 15118-20: EVMinimumEnergyRequest"
+       },
+       "target_soc": {
+        "type": "integer",
+        "description": "ISO 15118-20, Dynamic mode: TargetSOC"
+       },
+       "min_soc": {
+        "type": "integer",
+        "description": "ISO 15118-20, Dynamic mode: MinimumSOC"
+       },
+       "control_mode": {
+        "enum": [
+         "scheduled",
+         "dynamic"
+        ],
+        "description": "ISO 15118-20: the control mode the EV selected"
        }
       },
       "required": [

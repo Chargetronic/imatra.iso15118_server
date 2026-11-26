@@ -149,6 +149,8 @@ func protocolName(ns string) string {
 		return ""
 	case "urn:din:70121:2012:MsgDef":
 		return "din70121"
+	case "urn:iso:std:iso:15118:-20:AC":
+		return "iso15118-20"
 	default:
 		return "iso15118-2"
 	}
@@ -171,6 +173,19 @@ func evParameters(st *secc.State) map[string]any {
 	f("ev_max_power_w", ev.EVMaxPowerW)
 	f("ev_energy_request_wh", ev.EVEnergyRequestWh)
 	f("ev_energy_capacity_wh", ev.EVEnergyCapacityWh)
+	f("ev_min_power_w", ev.EVMinPowerW)
+	f("ev_target_energy_wh", ev.EVTargetEnergyWh)
+	f("ev_max_energy_wh", ev.EVMaxEnergyWh)
+	f("ev_min_energy_wh", ev.EVMinEnergyWh)
+	if ev.TargetSoC != nil {
+		d["target_soc"] = int(*ev.TargetSoC)
+	}
+	if ev.MinSoC != nil {
+		d["min_soc"] = int(*ev.MinSoC)
+	}
+	if st.ControlMode != 0 {
+		d["control_mode"] = map[int]string{1: "scheduled", 2: "dynamic"}[st.ControlMode]
+	}
 	if ev.DepartureTimeS != nil {
 		d["departure_time_s"] = *ev.DepartureTimeS
 	}

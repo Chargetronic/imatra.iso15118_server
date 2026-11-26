@@ -8,7 +8,8 @@
 // lives in State, which the caller loads before and stores after every step,
 // so any engine instance can serve any message (stateless engine).
 //
-// Scope: ISO 15118-2, AC, EIM (ExternalPayment).
+// Scope: ISO 15118-2, AC, EIM (ExternalPayment); ISO 15118-20, AC, EIM
+// (iso20.go); DIN 70121 only to read the EV's SoC (din.go).
 package secc
 
 import (
@@ -52,6 +53,9 @@ type Config struct {
 	LimitSource string    `json:"-"`
 	LimitUntil  time.Time `json:"-"`
 	LimitPrio   int       `json:"-"`
+	// ISO20: offer ISO 15118-20 AC in the handshake (ISO20_ENABLED; engine
+	// setting, not stored). Offered only on a TLS 1.3 connection (ADR-004).
+	ISO20 bool `json:"-"`
 }
 
 // EV data collected during the session; what partners and the UI care about.
@@ -73,6 +77,14 @@ type EVData struct {
 	FullSoC            *int8              `json:"full_soc,omitempty"`
 	BulkSoC            *int8              `json:"bulk_soc,omitempty"`
 	ChargingProfile    []exi.ProfileEntry `json:"charging_profile,omitempty"`
+	// ISO 15118-20 (ScheduleExchange, AC_ChargeLoop): the EV's energy
+	// requests and limits; EAmountWh carries the target energy as well.
+	EVMinPowerW      *float64 `json:"ev_min_power_w,omitempty"`
+	EVTargetEnergyWh *float64 `json:"ev_target_energy_wh,omitempty"`
+	EVMaxEnergyWh    *float64 `json:"ev_max_energy_wh,omitempty"`
+	EVMinEnergyWh    *float64 `json:"ev_min_energy_wh,omitempty"`
+	TargetSoC        *int8    `json:"target_soc,omitempty"`
+	MinSoC           *int8    `json:"min_soc,omitempty"`
 }
 
 // State is everything the engine needs to continue a V2G session.
@@ -101,6 +113,30 @@ type State struct {
 	// EVSEMaxCurrent in the device's pair: lets the journal show what a
 	// cached answer carried without decoding it.
 	CLMaxCurrent *exi.PV `json:"cl_evse_max_current,omitempty"`
+	// ISO 15118-20 (ADR-004, ADR-005). TLS: the device's transport to the EV
+	// as reported when the connection opened ("" = TCP). CLReqBits: the
+	// leading bits of CLReq the device compares (message type, session ID).
+	// ControlMode: the selected one; SchedPowerW: the power in the schedule
+	// given to the EV (Scheduled mode).
+	TLS         string  `json:"tls,omitempty"`
+	CLReqBits   int     `json:"cl_req_bits,omitempty"`
+	ControlMode int     `json:"control_mode,omitempty"`
+	SchedPowerW float64 `json:"sched_power_w,omitempty"`
+	// LastTS: the highest header TimeStamp (microseconds of SECC time) given
+	// to the EV in this session, by the server or, as the device reports it,
+	// from the cache: every next one is higher (V2G20-1537).
+	LastTS uint64 `json:"last_ts_us,omitempty"`
+	// Reneg: the schedule renegotiation on the side stream (0x8101) in
+	// progress: "" none, "schedule" (after AC_ChargeParameterDiscovery),
+	// "delivery" (after ScheduleExchange). RenegPowerW: the power of the
+	// schedule offered in it, in force after its PowerDelivery.
+	Reneg       string  `json:"reneg,omitempty"`
+	RenegPowerW float64 `json:"reneg_power_w,omitempty"`
+	// MeterRequested: the EV set MeterInfoRequested; every loop answer then
+	// carries MeterInfo (V2G20-1082) with MeterWh, the energy of this
+	// digital session from the device's readings (updated by the engine).
+	MeterRequested bool    `json:"meter_requested,omitempty"`
+	MeterWh        float64 `json:"meter_wh,omitempty"`
 }
 
 func NewState(now time.Time) *State {
@@ -117,7 +153,19 @@ func NewState(now time.Time) *State {
 //
 // False: the payload is a supportedAppProtocolReq (a new connection) or
 // cannot be decoded at all; the state is left as it is.
-func Resume(st *State, payload []byte) bool {
+func Resume(st *State, payload []byte) bool { return ResumePT(st, exi.PayloadEXI, payload) }
+
+// ResumePT is Resume for a request of the given V2GTP payload type: an
+// ISO 15118-20 request goes on from SessionSetup the same way (a new session,
+// or FAILED_UnknownSession).
+func ResumePT(st *State, pt uint16, payload []byte) bool {
+	if IsISO20(pt) {
+		if _, err := decode20(pt, "", false, payload); err == nil {
+			st.Protocol, st.Phase = exi.NamespaceISO20AC, PhaseSessionSetup
+			return true
+		}
+		return false
+	}
 	if _, err := exi.DecodeAppHand(payload); err == nil {
 		return false
 	}
@@ -136,6 +184,8 @@ func Resume(st *State, payload []byte) bool {
 type Result struct {
 	// EXI to send back to the EV. Nil when nothing must be sent.
 	EXI []byte
+	// PT: the V2GTP payload type of EXI (0x8001; ISO 15118-20: 0x8002 or 0x8003).
+	PT uint16
 	// Response, decoded form of EXI (for the message journal / UI).
 	Response any
 	// Request, decoded form of the input.
@@ -166,13 +216,38 @@ func DefaultEnv() Env {
 
 const chargeServiceID = 1
 
-// Step processes one EXI message (V2GTP payload type EXI) of the session.
+// Step processes one EXI message (V2GTP payload type 0x8001) of the session.
 func Step(st *State, cfg Config, env Env, payload []byte) (*Result, error) {
+	return StepPT(st, cfg, env, exi.PayloadEXI, payload)
+}
+
+// StepPT processes one message of the given V2GTP payload type.
+func StepPT(st *State, cfg Config, env Env, pt uint16, payload []byte) (*Result, error) {
+	r, err := stepPT(st, cfg, env, pt, payload)
+	if r != nil && r.PT == 0 {
+		r.PT = exi.PayloadEXI
+	}
+	return r, err
+}
+
+func stepPT(st *State, cfg Config, env Env, pt uint16, payload []byte) (*Result, error) {
 	if st.Phase == PhaseAppHand {
+		if pt != exi.PayloadEXI {
+			return nil, fmt.Errorf("payload type 0x%04x before the handshake", pt)
+		}
 		return stepAppHand(st, cfg, payload)
 	}
 	if st.Phase == PhaseEnded {
 		return nil, fmt.Errorf("session already ended (%s)", st.EndReason)
+	}
+	if st.Protocol == exi.NamespaceISO20AC {
+		if !IsISO20(pt) {
+			return nil, fmt.Errorf("payload type 0x%04x in an ISO 15118-20 session", pt)
+		}
+		return stepISO20(st, cfg, env, pt, payload)
+	}
+	if pt != exi.PayloadEXI {
+		return nil, fmt.Errorf("payload type 0x%04x in a %s session", pt, st.Protocol)
 	}
 	if st.Protocol == exi.NamespaceDIN {
 		return stepDIN(st, cfg, env, payload)
@@ -204,14 +279,19 @@ func stepAppHand(st *State, cfg Config, payload []byte) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ISO 15118-2 (AC) when the EV offers it, highest priority first; DIN
-	// 70121 only when it does not (a DC-only EV: the SoC read, then basic
-	// charging). A digital ISO 15118-2 session is never left for a SoC read.
+	// ISO 15118-20 AC first when it is enabled and the connection runs
+	// TLS 1.3 (ADR-004), then ISO 15118-2 (AC), highest priority first; DIN
+	// 70121 only when the EV offers neither (a DC-only EV: the SoC read, then
+	// basic charging). A digital session is never left for a SoC read.
 	best := -1
 	order := []string{exi.NamespaceISO2, exi.NamespaceDIN}
+	if iso20Offered(st, cfg) {
+		order = append([]string{exi.NamespaceISO20AC}, order...)
+	}
+	major := map[string]uint32{exi.NamespaceISO20AC: 1, exi.NamespaceISO2: 2, exi.NamespaceDIN: 2}
 	for _, ns := range order {
 		for i, p := range protos {
-			if p.Namespace == ns && p.Major == 2 {
+			if p.Namespace == ns && p.Major == major[ns] {
 				if best < 0 || p.Priority < protos[best].Priority {
 					best = i
 				}
@@ -236,8 +316,8 @@ func stepAppHand(st *State, cfg Config, payload []byte) (*Result, error) {
 		return r, err
 	}
 	for _, q := range protos {
-		if q.Namespace == exi.NamespaceISO2 && q.Major == 2 {
-			st.OffersISO2 = true
+		if (q.Namespace == exi.NamespaceISO2 && q.Major == 2) || (q.Namespace == exi.NamespaceISO20AC && q.Major == 1) {
+			st.OffersISO2 = true // an AC digital session exists for this EV
 		}
 	}
 	p := protos[best]
@@ -486,7 +566,7 @@ const (
 // the next cache misses: ChargingStatusRes with StopCharging, then
 // PowerDeliveryRes, then SessionStopRes). Nil when the loop has not started.
 func CachePair(st *State, cfg Config) (res []byte, term [][]byte, err error) {
-	if st.CLReq == "" || st.Phase != PhaseCharging {
+	if st.CLReq == "" || st.Phase != PhaseCharging || st.Protocol == exi.NamespaceISO20AC {
 		return nil, nil, nil
 	}
 	if res, err = chargingStatusRes(st, cfg, NotificationNone); err != nil {
@@ -509,6 +589,47 @@ func CachePair(st *State, cfg Config) (res []byte, term [][]byte, err error) {
 		term = append(term, b)
 	}
 	return res, term, nil
+}
+
+// Pair is the Charging Loop pair the device gets (ADR-005), for either
+// protocol version. ISO 15118-2: ReqBits is the whole request (constant
+// within a session), the answers are given as they are (TS 0: no time stamp). ISO 15118-20: only the first ReqBits bits
+// of the request are compared, and the device writes the current time at the
+// bit offsets ResTS / TermTS before it sends an answer. Key identifies the
+// answer without its time stamp (a new pair is sent only when it changes).
+type Pair struct {
+	// TS (ISO 15118-20): the time stamp of the pair's answers; the device
+	// writes a higher one each time it answers (V2G20-1537).
+	TS      uint64
+	PT      uint16
+	Res     []byte
+	ResTS   int
+	ReqBits int
+	Term    [][]byte
+	TermPT  []uint16
+	TermTS  []int
+	Key     string
+}
+
+// CachePairOf returns the session's pair, nil when the loop has not started
+// (or the -20 loop request could not be made cachable).
+func CachePairOf(st *State, cfg Config, now time.Time) (*Pair, error) {
+	if st.CLReq == "" || st.Phase != PhaseCharging {
+		return nil, nil
+	}
+	if st.Protocol == exi.NamespaceISO20AC {
+		return pair20(st, cfg, now)
+	}
+	res, term, err := CachePair(st, cfg)
+	if err != nil || res == nil {
+		return nil, err
+	}
+	termPT := make([]uint16, len(term))
+	for i := range termPT {
+		termPT[i] = exi.PayloadEXI
+	}
+	return &Pair{PT: exi.PayloadEXI, Res: res, Term: term, TermPT: termPT,
+		ReqBits: len(st.CLReq) / 2 * 8, Key: hex.EncodeToString(res)}, nil
 }
 
 func chargingStatusRes(st *State, cfg Config, notification int) ([]byte, error) {

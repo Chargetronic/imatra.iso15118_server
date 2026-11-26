@@ -54,6 +54,34 @@ int ev_encode_apphand_req(uint8_t* out, size_t cap, size_t* out_len) {
     return EV_OK;
 }
 
+// supportedAppProtocolReq of an EV with ISO 15118-20 AC (SchemaID 2, priority
+// 1) and ISO 15118-2 (SchemaID 1, priority 2).
+int ev_encode_apphand_req20(uint8_t* out, size_t cap, size_t* out_len) {
+    if (!out || !out_len) return EV_ERR_ARG;
+    static const char ns20[] = "urn:iso:std:iso:15118:-20:AC";
+    struct appHand_exiDocument doc;
+    memset(&doc, 0, sizeof(doc));
+    doc.supportedAppProtocolReq_isUsed = 1;
+    struct appHand_AppProtocolType* p = &doc.supportedAppProtocolReq.AppProtocol.array[0];
+    memcpy(p->ProtocolNamespace.characters, ns20, sizeof(ns20) - 1);
+    p->ProtocolNamespace.charactersLen = sizeof(ns20) - 1;
+    p->VersionNumberMajor = 1;
+    p->SchemaID = 2;
+    p->Priority = 1;
+    p = &doc.supportedAppProtocolReq.AppProtocol.array[1];
+    memcpy(p->ProtocolNamespace.characters, ISO2_NS, sizeof(ISO2_NS) - 1);
+    p->ProtocolNamespace.charactersLen = sizeof(ISO2_NS) - 1;
+    p->VersionNumberMajor = 2;
+    p->SchemaID = 1;
+    p->Priority = 2;
+    doc.supportedAppProtocolReq.AppProtocol.arrayLen = 2;
+    exi_bitstream_t s;
+    exi_bitstream_init(&s, out, cap, 0, NULL);
+    if (encode_appHand_exiDocument(&s, &doc) != 0) return EV_ERR_ENCODE;
+    *out_len = exi_bitstream_get_length(&s);
+    return EV_OK;
+}
+
 int ev_encode_req(const ev_req* in, uint8_t* out, size_t cap, size_t* out_len) {
     if (!in || !out || !out_len) return EV_ERR_ARG;
     static _Thread_local struct iso2_exiDocument doc;
