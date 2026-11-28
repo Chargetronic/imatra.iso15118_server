@@ -641,6 +641,22 @@ func (p *projector) apply(ctx context.Context, tx *sql.Tx, e *ev) error {
 		}
 		return nil
 	case "limit.changed":
+		// The device confirms a limit within milliseconds, and its
+		// limit.applied can reach the feed before the limit.changed of the
+		// same command (the engine writes them in different batches): then
+		// applyLive has just cleared the confirmation. It is taken from the
+		// command itself.
+		if r := e.live[dev]; r != nil && r.cmd.Valid && !r.confirmed.Valid {
+			var acked sql.NullInt64
+			err := tx.QueryRowContext(ctx, `SELECT `+us("acked_at")+` FROM limits WHERE command_id = $1 AND device_id = $2`,
+				r.cmd.Int64, dev).Scan(&acked)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if acked.Valid {
+				r.confirmed, r.dirty = acked, true
+			}
+		}
 		return nil
 	case "limit.applied":
 		return summary(`limits_applied = limits_applied + 1`)
