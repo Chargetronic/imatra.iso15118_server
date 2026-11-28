@@ -11,6 +11,12 @@ Changes to a contract (device protocol, registry and rules, database schema,
 
 ### Fixed
 
+- Device view: a limit the device confirmed could show as not confirmed
+  (`limit_confirmed_at` null in `/v1/devices`) when the confirmation
+  (`limit.applied`) reached the feed before the `limit.changed` of the same
+  command; the engine writes them in different batches, and a device
+  confirms within milliseconds. The projector now takes the confirmation
+  from the command itself in that case.
 - Session summaries: a limit applied after the device's plug-in id changed
   without an unplug was not counted (`limits_applied` 0), and the earlier
   plug-in ended "no unplug seen" only when the next one started
